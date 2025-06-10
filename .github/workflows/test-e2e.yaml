@@ -20,7 +20,7 @@ jobs:
         with:
           # repository: kubeflow/sdk
           # ref: main
-          path: kubeflow-sdk
+#          path: kubeflow-sdk
 
       - name: Setup Python
         uses: actions/setup-python@v5
