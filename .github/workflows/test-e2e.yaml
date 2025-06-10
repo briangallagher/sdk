@@ -33,7 +33,7 @@ jobs:
           pip install papermill==2.6.0 jupyter==1.1.1 ipykernel==6.29.5
 
           echo "Install Kubeflow SDK"
-          pip install ./kubeflow-sdk/python
+          pip install ./python
 
       - name: Setup cluster
         run: |
