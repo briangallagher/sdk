@@ -55,12 +55,7 @@ cat <<EOF > "${E2E_MANIFESTS_DIR}/kustomization.yaml"
   apiVersion: kustomize.config.k8s.io/v1beta1
   kind: Kustomization
   resources:
-  # The path here needs to be relative from where kubectl apply -k is run
-  # If E2E_MANIFESTS_DIR is at the SDK repo root, and manifests/overlays/manager is in Trainer,
-  # the path needs to be adjusted.
-  # This should be relative to the Kustomization file itself (E2E_MANIFESTS_DIR).
-  # So, it should be relative to the TRAINER_REPO_PATH
-  - "${TRAINER_REPO_PATH}/manifests/overlays/manager"
+  - "../../trainer/manifests/overlays/manager"
   images:
   - name: "${CONTROLLER_MANAGER_CI_IMAGE_NAME}"
     newTag: "${CONTROLLER_MANAGER_CI_IMAGE_TAG}"
