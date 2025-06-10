@@ -55,7 +55,7 @@ cat <<EOF > "${E2E_MANIFESTS_DIR}/kustomization.yaml"
   apiVersion: kustomize.config.k8s.io/v1beta1
   kind: Kustomization
   resources:
-  - "../../trainer/manifests/overlays/manager"
+  - "../../../trainer/manifests/overlays/manager"
   images:
   - name: "${CONTROLLER_MANAGER_CI_IMAGE_NAME}"
     newTag: "${CONTROLLER_MANAGER_CI_IMAGE_TAG}"
