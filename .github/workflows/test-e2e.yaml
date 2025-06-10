@@ -15,17 +15,10 @@ jobs:
         kubernetes-version: ["1.29.14", "1.30.0", "1.31.0", "1.32.3"]
 
     steps:
-      - name: Checkout remote repo for Go version
-        uses: actions/checkout@v4
-        with:
-          repository: kubeflow/trainer
-          ref: master
-          path: trainer-repo
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: ./trainer-repo/go.mod
+          go-version: 1.24.x
 
       - name: Check out SDK repo
         uses: actions/checkout@v4
