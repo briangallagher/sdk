@@ -9,3 +9,8 @@ __debug_bin
 # Python cache files
 __pycache__/
 *.egg-info/
+
+# Jupyter Notebooks.
+**/.ipynb_checkpoints
+# The default output for various artifacts (e.g. Jupyter Notebooks after Papermill execution).
+artifacts
