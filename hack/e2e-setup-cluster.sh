@@ -29,7 +29,7 @@ KIND_NODE_VERSION=kindest/node:v${K8S_VERSION}
 NAMESPACE="kubeflow-system"
 TIMEOUT="5m"
 
-git clone https://github.com/kubeflow/trainer
+git clone "${KUBEFLOW_TRAINER_REPO}"
 cd trainer
 
 # Kubeflow Trainer images.
@@ -44,7 +44,7 @@ echo "Create Kind cluster and load Kubeflow Trainer images"
 ${KIND} create cluster --image "${KIND_NODE_VERSION}"
 ${KIND} load docker-image ${CONTROLLER_MANAGER_CI_IMAGE}
 
-echo "Deploy Kubeflow Trainer control plane"
+echo "Deploy Kubeflow Trainer control plane and Jobset controller"
 E2E_MANIFESTS_DIR="artifacts/e2e/manifests"
 mkdir -p "${E2E_MANIFESTS_DIR}"
 cat <<EOF > "${E2E_MANIFESTS_DIR}/kustomization.yaml"
