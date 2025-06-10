@@ -20,10 +20,10 @@ jobs:
       # This is where your Makefile and the 'python' directory for SDK installation reside.
       - name: Checkout Kubeflow SDK repository
         uses: actions/checkout@v4
-        with:
-          repository: kubeflow/sdk # Explicitly specify the SDK repo
-          ref: main # Or the branch you want to use for the SDK (e.g., specific branch name, or ${{ github.ref_name }} if it's based on the PR's branch)
-          path: . # Clones to the root of the workspace
+#        with:
+#          repository: kubeflow/sdk # Explicitly specify the SDK repo
+#          ref: main # Or the branch you want to use for the SDK (e.g., specific branch name, or ${{ github.ref_name }} if it's based on the PR's branch)
+#          path: . # Clones to the root of the workspace
 
       # Step 2: Checkout the Kubeflow Trainer repository
       # This is needed to get the go.mod file for Go tool versions (Kind, etc.)
