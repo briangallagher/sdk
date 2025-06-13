@@ -9,3 +9,5 @@ __debug_bin
 # Python cache files
 __pycache__/
 *.egg-info/
+
+.coverage
