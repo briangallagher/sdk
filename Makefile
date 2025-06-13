@@ -9,7 +9,7 @@ PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 LOCALBIN ?= $(PROJECT_DIR)/bin
 
 # Tool versions
-KIND_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/kind)
+KIND_VERSION ?= v0.27.0
 K8S_VERSION ?= 1.32.0
 
 # Tool binaries
