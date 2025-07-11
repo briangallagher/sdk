@@ -1,0 +1,26 @@
+name: coverage
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Tests
+        run: |
+          make test-unit xml=true
+
+      - name: Upload coverage to Coveralls
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          coveralls --verbose || echo "Coveralls report failed"
