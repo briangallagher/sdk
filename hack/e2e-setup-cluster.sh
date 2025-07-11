@@ -22,7 +22,6 @@ set -o pipefail
 set -x
 
 # Configure variables.
-# KUBEFLOW_TRAINER_REPO="https://github.com/kubeflow/trainer" # This is no longer needed
 KIND=${KIND:-./bin/kind}
 K8S_VERSION=${K8S_VERSION:-1.32.0}
 KIND_NODE_VERSION=kindest/node:v${K8S_VERSION}
