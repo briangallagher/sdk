@@ -15,7 +15,6 @@
 import inspect
 import os
 import queue
-import re
 import textwrap
 import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -259,7 +258,7 @@ def get_entrypoint_using_train_func(
     # Check if the runtime has a trainer.
     if not runtime.trainer:
         raise ValueError(f"Runtime must have a trainer: {runtime}")
-    
+
     # Check if training function is callable.
     if not callable(train_func):
         raise ValueError(
@@ -499,12 +498,16 @@ def get_dataset_initializer(
             if dataset.storage_uri.startswith("hf://")
             else "hf://" + dataset.storage_uri
         ),
-        env=[
-            models.IoK8sApiCoreV1EnvVar(
-                name=constants.INITIALIZER_ENV_ACCESS_TOKEN,
-                value=dataset.access_token,
-            ),
-        ] if dataset.access_token else None
+        env=(
+            [
+                models.IoK8sApiCoreV1EnvVar(
+                    name=constants.INITIALIZER_ENV_ACCESS_TOKEN,
+                    value=dataset.access_token,
+                ),
+            ]
+            if dataset.access_token
+            else None
+        ),
     )
 
     return dataset_initializer
@@ -526,12 +529,16 @@ def get_model_initializer(
             if model.storage_uri.startswith("hf://")
             else "hf://" + model.storage_uri
         ),
-        env=[
-            models.IoK8sApiCoreV1EnvVar(
-                name=constants.INITIALIZER_ENV_ACCESS_TOKEN,
-                value=model.access_token,
-            ),
-        ] if model.access_token else None
+        env=(
+            [
+                models.IoK8sApiCoreV1EnvVar(
+                    name=constants.INITIALIZER_ENV_ACCESS_TOKEN,
+                    value=model.access_token,
+                ),
+            ]
+            if model.access_token
+            else None
+        ),
     )
 
     return model_initializer
