@@ -32,13 +32,14 @@ classifiers = [
 dependencies = [
   "kubernetes>=27.2.0",
   "pydantic>=2.10.0",
-  "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api"
+  "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
 ]
 [project.optional-dependencies]
 test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
   "coverage>=7.0",
+  "coveralls>=4.0.1",
 ]
 
 [project.urls]
