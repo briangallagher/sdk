@@ -78,7 +78,7 @@ TRAIN_JOB_WITH_CUSTOM_TRAINER = "train-job-with-custom-trainer"
 @pytest.fixture
 def training_client(request):
     """Provide a TrainerClient with mocked Kubernetes APIs."""
-    with patch(
+    with patch("kubernetes.config.load_kube_config", return_value=None), patch(
         "kubernetes.client.CustomObjectsApi",
         return_value=Mock(
             create_namespaced_custom_object=Mock(side_effect=conditional_error_handler),
