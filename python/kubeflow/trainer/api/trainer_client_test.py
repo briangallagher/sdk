@@ -66,6 +66,7 @@ FAIL_LOGS = "fail_logs"
 TORCH_DISTRIBUTED = "torch-distributed"
 LIST_RUNTIMES = "list_runtimes"
 BASIC_TRAIN_JOB_NAME = "basic-job"
+TRAIN_JOBS = "trainjobs"
 TRAIN_JOB_WITH_BUILT_IN_TRAINER = "train-job-with-built-in-trainer"
 TRAIN_JOB_WITH_CUSTOM_TRAINER = "train-job-with-custom-trainer"
 
@@ -78,7 +79,7 @@ TRAIN_JOB_WITH_CUSTOM_TRAINER = "train-job-with-custom-trainer"
 @pytest.fixture
 def training_client(request):
     """Provide a TrainerClient with mocked Kubernetes APIs."""
-    with patch(
+    with patch("kubernetes.config.load_kube_config", return_value=None), patch(
         "kubernetes.client.CustomObjectsApi",
         return_value=Mock(
             create_namespaced_custom_object=Mock(side_effect=conditional_error_handler),
@@ -302,7 +303,7 @@ def get_namespaced_custom_object_response(*args, **kwargs):
         raise multiprocessing.TimeoutError()
     if args[2] == RUNTIME or args[4] == RUNTIME:
         raise RuntimeError()
-    if args[3] == "trainjobs":  # TODO: review this.
+    if args[3] == TRAIN_JOBS:  # TODO: review this.
         job = add_status(create_train_job(train_job_name=args[4]))
 
     mock_thread = Mock()
@@ -340,9 +341,11 @@ def list_namespaced_custom_object_response(*args, **kwargs):
         raise multiprocessing.TimeoutError()
     if args[2] == RUNTIME:
         raise RuntimeError()
-    if args[2] == "basic-job":
-        return_value = {"items": [create_train_job(train_job_name="basic-job")]}
-    if args[3] == "trainjobs":
+    if args[2] == BASIC_TRAIN_JOB_NAME:
+        return_value = {
+            "items": [create_train_job(train_job_name=BASIC_TRAIN_JOB_NAME)]
+        }
+    if args[3] == TRAIN_JOBS:
         return_value = build_train_job_list()
 
     mock_thread.get.return_value = return_value
@@ -570,190 +573,33 @@ def get_train_job_data_type(
 
 
 # --------------------------
-# Test Data
-# --------------------------
-
-test_data_list_jobs = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={},
-        expected_output=[
-            get_train_job_data_type(train_job_name="basic-job-1"),
-            get_train_job_data_type(train_job_name="basic-job-2"),
-        ],
-    ),
-    TestCase(
-        name="timeout error when listing jobs",
-        expected_status=FAILED,
-        config={"namespace": TIMEOUT},
-        expected_error=TimeoutError,
-    ),
-    TestCase(
-        name="runtime error when listing jobs",
-        expected_status=FAILED,
-        config={"namespace": RUNTIME},
-        expected_error=RuntimeError,
-    ),
-]
-
-test_data_get_runtime = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={},
-        expected_output=create_runtime_type(),
-    ),
-    TestCase(
-        name="timeout error when getting runtime",
-        expected_status=FAILED,
-        config={"name": TIMEOUT},
-        expected_error=TimeoutError,
-    ),
-    TestCase(
-        name="runtime error when getting runtime",
-        expected_status=FAILED,
-        config={"name": RUNTIME},
-        expected_error=RuntimeError,
-    ),
-]
-
-test_data_list_runtimes = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={"name": LIST_RUNTIMES},
-        expected_output=[
-            create_runtime_type(name="runtime-1"),
-            create_runtime_type(name="runtime-2"),
-        ],
-    ),
-]
-
-test_data_train = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={},
-        expected_output=get_train_job(train_job_name=BASIC_TRAIN_JOB_NAME),
-    ),
-    TestCase(
-        name="valid flow with built in trainer",
-        expected_status=SUCCESS,
-        config={
-            "trainer": types.BuiltinTrainer(
-                config=types.TorchTuneConfig(
-                    num_nodes=2,
-                    batch_size=2,
-                    epochs=2,
-                    loss=types.Loss.CEWithChunkedOutputLoss,
-                )
-            )
-        },
-        expected_output=get_train_job(
-            train_job_name=TRAIN_JOB_WITH_BUILT_IN_TRAINER, add_built_in_trainer=True
-        ),
-    ),
-    TestCase(
-        name="valid flow with custom trainer",
-        expected_status=SUCCESS,
-        config={
-            "trainer": types.CustomTrainer(
-                func=lambda: print("Hello World"),
-                func_args={"learning_rate": 0.001, "batch_size": 32},
-                packages_to_install=["torch", "numpy"],
-                pip_index_url=constants.DEFAULT_PIP_INDEX_URL,
-                num_nodes=2,
-            )
-        },
-        expected_output=get_train_job(
-            train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER, add_custom_trainer=True
-        ),
-    ),
-    TestCase(
-        name="timeout error when deleting job",
-        expected_status=FAILED,
-        config={
-            "namespace": TIMEOUT,
-        },
-        expected_error=TimeoutError,
-    ),
-    TestCase(
-        name="runtime error when deleting job",
-        expected_status=FAILED,
-        config={
-            "namespace": RUNTIME,
-        },
-        expected_error=RuntimeError,
-    ),
-]
-
-test_data_get_job = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={"name": BASIC_TRAIN_JOB_NAME},
-        expected_output=get_train_job_data_type(train_job_name=BASIC_TRAIN_JOB_NAME),
-    ),
-    TestCase(
-        name="timeout error when getting job",
-        expected_status=FAILED,
-        config={"name": TIMEOUT},
-        expected_error=TimeoutError,
-    ),
-    TestCase(
-        name="runtime error when getting job",
-        expected_status=FAILED,
-        config={"name": RUNTIME},
-        expected_error=RuntimeError,
-    ),
-]
-
-test_data_delete_job = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={"name": BASIC_TRAIN_JOB_NAME},
-        expected_output=None,
-    ),
-    TestCase(
-        name="timeout error when deleting job",
-        expected_status=FAILED,
-        config={"namespace": TIMEOUT},
-        expected_error=TimeoutError,
-    ),
-    TestCase(
-        name="runtime error when deleting job",
-        expected_status=FAILED,
-        config={"namespace": RUNTIME},
-        expected_error=RuntimeError,
-    ),
-]
-
-test_data_get_job_logs = [
-    TestCase(
-        name="valid flow with all defaults",
-        expected_status=SUCCESS,
-        config={"name": BASIC_TRAIN_JOB_NAME},
-        expected_output={
-            "node-0": "test log content",
-        },
-    ),
-    TestCase(
-        name="runtime error when getting logs",
-        expected_status=FAILED,
-        config={"name": RUNTIME},
-        expected_error=RuntimeError,
-    ),
-]
-
-
-# --------------------------
 # Tests
 # --------------------------
 
 
-@pytest.mark.parametrize("test_case", test_data_get_runtime)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={},
+            expected_output=create_runtime_type(),
+        ),
+        TestCase(
+            name="timeout error when getting runtime",
+            expected_status=FAILED,
+            config={"name": TIMEOUT},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when getting runtime",
+            expected_status=FAILED,
+            config={"name": RUNTIME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_get_runtime(training_client, test_case):
     """Test TrainerClient.get_runtime with basic success path."""
     print("Executing test:", test_case.name)
@@ -771,7 +617,20 @@ def test_get_runtime(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_list_runtimes)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={"name": LIST_RUNTIMES},
+            expected_output=[
+                create_runtime_type(name="runtime-1"),
+                create_runtime_type(name="runtime-2"),
+            ],
+        ),
+    ],
+)
 def test_list_runtimes(training_client, test_case):
     """Test TrainerClient.list_runtimes with basic success path."""
     print("Executing test:", test_case.name)
@@ -791,7 +650,67 @@ def test_list_runtimes(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_train)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={},
+            expected_output=get_train_job(train_job_name=BASIC_TRAIN_JOB_NAME),
+        ),
+        TestCase(
+            name="valid flow with built in trainer",
+            expected_status=SUCCESS,
+            config={
+                "trainer": types.BuiltinTrainer(
+                    config=types.TorchTuneConfig(
+                        num_nodes=2,
+                        batch_size=2,
+                        epochs=2,
+                        loss=types.Loss.CEWithChunkedOutputLoss,
+                    )
+                )
+            },
+            expected_output=get_train_job(
+                train_job_name=TRAIN_JOB_WITH_BUILT_IN_TRAINER,
+                add_built_in_trainer=True,
+            ),
+        ),
+        TestCase(
+            name="valid flow with custom trainer",
+            expected_status=SUCCESS,
+            config={
+                "trainer": types.CustomTrainer(
+                    func=lambda: print("Hello World"),
+                    func_args={"learning_rate": 0.001, "batch_size": 32},
+                    packages_to_install=["torch", "numpy"],
+                    pip_index_url=constants.DEFAULT_PIP_INDEX_URL,
+                    num_nodes=2,
+                )
+            },
+            expected_output=get_train_job(
+                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER, add_custom_trainer=True
+            ),
+        ),
+        TestCase(
+            name="timeout error when deleting job",
+            expected_status=FAILED,
+            config={
+                "namespace": TIMEOUT,
+            },
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when deleting job",
+            expected_status=FAILED,
+            config={
+                "namespace": RUNTIME,
+            },
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_train(training_client, test_case):
     """Test TrainerClient.train with basic success path."""
     print("Executing test:", test_case.name)
@@ -822,7 +741,31 @@ def test_train(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_get_job)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={"name": BASIC_TRAIN_JOB_NAME},
+            expected_output=get_train_job_data_type(
+                train_job_name=BASIC_TRAIN_JOB_NAME
+            ),
+        ),
+        TestCase(
+            name="timeout error when getting job",
+            expected_status=FAILED,
+            config={"name": TIMEOUT},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when getting job",
+            expected_status=FAILED,
+            config={"name": RUNTIME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_get_job(training_client, test_case):
     """Test TrainerClient.get_job with basic success path."""
     print("Executing test:", test_case.name)
@@ -837,7 +780,32 @@ def test_get_job(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_list_jobs)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={},
+            expected_output=[
+                get_train_job_data_type(train_job_name="basic-job-1"),
+                get_train_job_data_type(train_job_name="basic-job-2"),
+            ],
+        ),
+        TestCase(
+            name="timeout error when listing jobs",
+            expected_status=FAILED,
+            config={"namespace": TIMEOUT},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when listing jobs",
+            expected_status=FAILED,
+            config={"namespace": RUNTIME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_list_jobs(training_client, test_case):
     """Test TrainerClient.list_jobs with basic success path."""
     print("Executing test:", test_case.name)
@@ -854,7 +822,29 @@ def test_list_jobs(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_delete_job)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={"name": BASIC_TRAIN_JOB_NAME},
+            expected_output=None,
+        ),
+        TestCase(
+            name="timeout error when deleting job",
+            expected_status=FAILED,
+            config={"namespace": TIMEOUT},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when deleting job",
+            expected_status=FAILED,
+            config={"namespace": RUNTIME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_delete_job(training_client, test_case):
     """Test TrainerClient.delete_job with basic success path."""
     print("Executing test:", test_case.name)
@@ -876,7 +866,25 @@ def test_delete_job(training_client, test_case):
     print("test execution complete")
 
 
-@pytest.mark.parametrize("test_case", test_data_get_job_logs)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with all defaults",
+            expected_status=SUCCESS,
+            config={"name": BASIC_TRAIN_JOB_NAME},
+            expected_output={
+                "node-0": "test log content",
+            },
+        ),
+        TestCase(
+            name="runtime error when getting logs",
+            expected_status=FAILED,
+            config={"name": RUNTIME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
 def test_get_job_logs(training_client, test_case):
     """Test TrainerClient.get_job_logs with basic success path."""
     print("Executing test:", test_case.name)

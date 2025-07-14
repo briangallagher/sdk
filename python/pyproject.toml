@@ -39,6 +39,7 @@ test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
   "coverage>=7.0",
+  "coveralls>=4.0.1",
 ]
 
 [project.urls]
