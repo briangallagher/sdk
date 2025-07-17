@@ -1,4 +1,4 @@
-name: test-unit
+name: Unit Test - Python
 
 on:
   - pull_request
