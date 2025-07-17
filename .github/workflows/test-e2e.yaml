@@ -6,13 +6,13 @@ on:
 jobs:
   e2e-test:
     name: E2E Test
-    runs-on:
-      labels: ubuntu-latest-16-cores
+    runs-on: oracle-vm-16cpu-64gb-x86-64
 
     strategy:
       fail-fast: false
       matrix:
         kubernetes-version: ["1.29.14", "1.30.0", "1.31.0", "1.32.3"]
+        trainer-ref: ["master"]
 
     steps:
       - name: Checkout Kubeflow SDK repository
@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: kubeflow/trainer
-          ref: master
+          ref: ${{ matrix.trainer-ref }}
           path: trainer
 
       - name: Setup Python
