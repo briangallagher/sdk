@@ -22,6 +22,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        run: |
+          make uv
+
       - name: Run Tests
         run: |
           make test-unit xml=true

@@ -52,22 +52,15 @@ uv: ## Install UV
 ruff: ## Install Ruff
 	@uvx ruff --help &> /dev/null || uv tool install ruff
 
-
 .PHONY: verify
 verify: uv ruff  ## install all required tools
 	@cd $(PY_DIR) && uv lock --check
 	@cd $(PY_DIR) && uvx ruff check --show-fixes
 
-.PHONY: test-python
-test-python: ## Run Python unit test.
-	uv install --dev
-	PYTHONPATH=$(PROJECT_DIR) pytest ./python/kubeflow
-  
-  
  # make test-unit will produce html coverage by default. Run with `make test-unit report=xml` to produce xml report.
 .PHONY: test-unit
 test-unit:
-	pip install "./python[test]"
+	uv pip install "./python[test]"
 	coverage run --source=kubeflow.trainer.api.trainer_client,kubeflow.trainer.utils.utils -m pytest ./python/kubeflow/trainer/api/trainer_client_test.py
 	coverage report -m kubeflow/trainer/api/trainer_client.py kubeflow/trainer/utils/utils.py
 ifeq ($(report),xml)
@@ -75,6 +68,3 @@ ifeq ($(report),xml)
 else
 	coverage html
 endif
-
-
-
