@@ -16,20 +16,14 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install uv and create virtual environment
-        run: |
-          make uv
-          make uv-venv
-
       - name: Verify
         run: make verify
 
       - name: Run Tests
         run: |
-          make test-python xml=true
+          make test-python report=xml
 
       - name: Upload coverage to Coveralls
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          coveralls --verbose || echo "Coveralls report failed"
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }} # Pass the GITHUB_TOKEN

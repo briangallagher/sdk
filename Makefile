@@ -21,6 +21,7 @@ SHELL = /usr/bin/env bash -o pipefail
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 
 PY_DIR := $(PROJECT_DIR)/python
+VENV_DIR := $(PROJECT_DIR)/.venv
 
 ##@ General
 
@@ -38,7 +39,6 @@ PY_DIR := $(PROJECT_DIR)/python
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-
 #UV := $(shell which uv)
 
 .PHONY: uv
@@ -53,23 +53,27 @@ ruff: ## Install Ruff
 	@uvx ruff --help &> /dev/null || uv tool install ruff
 
 .PHONY: verify
-verify: uv ruff  ## install all required tools
+verify: uv uv-venv ruff  ## install all required tools
 	@cd $(PY_DIR) && uv lock --check
 	@cd $(PY_DIR) && uvx ruff check --show-fixes
 
 .PHONY: uv-venv
 uv-venv:
-	uv venv
-	source .venv/bin/activate
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "Creating uv virtual environment in $(VENV_DIR)..."; \
+		uv venv; \
+	else \
+		echo "uv virtual environment already exists in $(VENV_DIR)."; \
+	fi
 
  # make test-unit will produce html coverage by default. Run with `make test-unit report=xml` to produce xml report.
 .PHONY: test-python
-test-python:
-	uv pip install "./python[test]"
-	coverage run --source=kubeflow.trainer.api.trainer_client,kubeflow.trainer.utils.utils -m pytest ./python/kubeflow/trainer/api/trainer_client_test.py
-	coverage report -m kubeflow/trainer/api/trainer_client.py kubeflow/trainer/utils/utils.py
+test-python: uv-venv
+	@uv pip install "./python[test]"
+	@uv run coverage run --source=kubeflow.trainer.api.trainer_client,kubeflow.trainer.utils.utils -m pytest ./python/kubeflow/trainer/api/trainer_client_test.py
+	@uv run coverage report -m kubeflow/trainer/api/trainer_client.py kubeflow/trainer/utils/utils.py
 ifeq ($(report),xml)
-	coverage xml
+	@uv run coverage xml
 else
-	coverage html
+	@uv run coverage html
 endif
