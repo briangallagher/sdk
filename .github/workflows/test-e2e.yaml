@@ -12,13 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kubernetes-version: ["1.30.0", "1.31.0", "1.32.3", "1.33.2"]
+        kubernetes-version: ["1.29.14", "1.30.0", "1.31.0", "1.32.3"]
 
     steps:
       - name: Checkout Kubeflow SDK repository
         uses: actions/checkout@v4
 
-      - name: Checkout Kubeflow Trainer repo for Go version
+      - name: Checkout Kubeflow Trainer repository
         uses: actions/checkout@v4
         with:
           repository: kubeflow/trainer
