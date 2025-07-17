@@ -57,9 +57,14 @@ verify: uv ruff  ## install all required tools
 	@cd $(PY_DIR) && uv lock --check
 	@cd $(PY_DIR) && uvx ruff check --show-fixes
 
+.PHONY: uv-venv
+uv-venv:
+	uv venv
+	source .venv/bin/activate
+
  # make test-unit will produce html coverage by default. Run with `make test-unit report=xml` to produce xml report.
-.PHONY: test-unit
-test-unit:
+.PHONY: test-python
+test-python:
 	uv pip install "./python[test]"
 	coverage run --source=kubeflow.trainer.api.trainer_client,kubeflow.trainer.utils.utils -m pytest ./python/kubeflow/trainer/api/trainer_client_test.py
 	coverage report -m kubeflow/trainer/api/trainer_client.py kubeflow/trainer/utils/utils.py
