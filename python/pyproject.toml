@@ -32,11 +32,25 @@ dependencies = [
   "model-registry>=0.2.21",
 ]
 [project.optional-dependencies]
+trainer = [
+  "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
+]
+model_registry = [
+  "model-registry>=0.2.21",
+]
 test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
   "coverage>=7.0",
 ]
+all = [
+  "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
+  "model-registry>=0.2.21",
+  "pytest>=7.0",
+  "pytest-mock>=3.10",
+  "coverage>=7.0",
+]
+
 
 [project.urls]
 Homepage = "https://github.com/kubeflow/sdk"
