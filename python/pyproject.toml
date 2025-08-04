@@ -33,6 +33,7 @@ dependencies = [
 trainer = [
   "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
 ]
+kfp = ["kfp>=2.13.0"]
 model_registry = ["model-registry>=0.2.21"]
 model_registry_boto3 = ["model-registry[boto3]>=0.2.21"]
 model_registry_hf = ["model-registry[hf]>=0.2.21"]
