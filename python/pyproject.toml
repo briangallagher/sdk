@@ -33,9 +33,10 @@ dependencies = [
 trainer = [
   "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
 ]
-model_registry = [
-  "model-registry>=0.2.21",
-]
+model_registry = ["model-registry>=0.2.21"]
+model_registry_aws = ["model-registry[aws]>=0.2.21"]
+model_registry_gcp = ["model-registry[gcp]>=0.2.21"]
+model_registry_all = ["model-registry[aws,gcp]>=0.2.21"]
 test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
