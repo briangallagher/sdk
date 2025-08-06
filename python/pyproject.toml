@@ -31,6 +31,9 @@ dependencies = [
   "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api"
 ]
 [project.optional-dependencies]
+registry = [
+  "model_registry@git+https://github.com/briangallagher/model-registry.git@namespaces#subdirectory=clients/python"
+]
 test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
