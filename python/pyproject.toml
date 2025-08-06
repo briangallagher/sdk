@@ -34,6 +34,9 @@ dependencies = [
 registry = [
   "model_registry@git+https://github.com/briangallagher/model-registry.git@namespaces#subdirectory=clients/python"
 ]
+kfp = [
+  "kfp@git+https://github.com/briangallagher/pipelines.git@namespaces#subdirectory=sdk/python"
+]
 test = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
