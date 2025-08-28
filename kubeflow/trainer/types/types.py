@@ -47,6 +47,26 @@ class CustomTrainer:
     env: Optional[Dict[str, str]] = None
 
 
+# Algorithm options for the TrainingHub Trainer.
+class TrainingHubAlgorithms(Enum):
+    """Algorithm for TrainingHub Trainer."""
+    SFT = "sft"
+    OSFT = "osft"
+
+
+@dataclass
+class TrainingHubTrainer:
+    func: Optional[Callable] = None
+    func_args: Optional[Dict] = None
+    packages_to_install: Optional[list[str]] = None
+    pip_index_url: str = constants.DEFAULT_PIP_INDEX_URL
+    env: Optional[Dict[str, str]] = None
+    algorithm: Optional[TrainingHubAlgorithms] = None
+    # New: Optional volumes and mounts (API models are provided by caller)
+    volumes: Optional[list] = None
+    volume_mounts: Optional[list] = None
+
+
 # TODO(Electronic-Waste): Add more loss functions.
 # Loss function for the TorchTune LLM Trainer.
 class Loss(Enum):
@@ -154,10 +174,12 @@ class BuiltinTrainer:
 # Change it to list: BUILTIN_CONFIGS, once we support more Builtin Trainer configs.
 TORCH_TUNE = BuiltinTrainer.__annotations__["config"].__name__.lower().replace("config", "")
 
+TRAINING_HUB = constants.TRAINING_HUB_FRAMEWORK_LABEL
 
 class TrainerType(Enum):
     CUSTOM_TRAINER = CustomTrainer.__name__
     BUILTIN_TRAINER = BuiltinTrainer.__name__
+    TRAINING_HUB_TRAINER = TrainingHubTrainer.__name__
 
 
 # Representation for the Trainer of the runtime.

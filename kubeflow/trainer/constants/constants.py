@@ -61,6 +61,9 @@ TRAINJOB_ANCESTOR_LABEL = "trainer.kubeflow.org/trainjob-ancestor-step"
 # The label key to identify ML framework that runtime uses (e.g. torch, deepspeed, torchtune, etc.)
 RUNTIME_FRAMEWORK_LABEL = "trainer.kubeflow.org/framework"
 
+# Framework label values
+TRAINING_HUB_FRAMEWORK_LABEL = "training-hub"
+
 # The name of the ReplicatedJob and container of the dataset initializer.
 # Also, it represents the `trainjob-ancestor-step` label value for the dataset initializer step.
 DATASET_INITIALIZER = "dataset-initializer"
@@ -141,6 +144,13 @@ EXEC_FUNC_SCRIPT = textwrap.dedent(
 
 # The default command for the PlainML CustomTrainer.
 DEFAULT_COMMAND = (
+    "bash",
+    "-c",
+    EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "python"),
+)
+
+# The default command for TrainingHub Trainer.
+TRAINING_HUB_COMMAND = (
     "bash",
     "-c",
     EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "python"),

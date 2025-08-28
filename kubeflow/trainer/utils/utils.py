@@ -118,12 +118,16 @@ def get_runtime_trainer(
     if not (trainer_container and trainer_container.image):
         raise Exception(f"Runtime doesn't have trainer container {replicated_jobs}")
 
+    # Map framework to trainer type
+    if framework == types.TORCH_TUNE:
+        trainer_type = types.TrainerType.BUILTIN_TRAINER
+    elif framework == types.TRAINING_HUB:
+        trainer_type = types.TrainerType.TRAINING_HUB_TRAINER
+    else:
+        trainer_type = types.TrainerType.CUSTOM_TRAINER
+
     trainer = types.RuntimeTrainer(
-        trainer_type=(
-            types.TrainerType.BUILTIN_TRAINER
-            if framework == types.TORCH_TUNE
-            else types.TrainerType.CUSTOM_TRAINER
-        ),
+        trainer_type=trainer_type,
         framework=framework,
     )
 
@@ -150,6 +154,8 @@ def get_runtime_trainer(
     # Set the Trainer entrypoint.
     if framework == types.TORCH_TUNE:
         trainer.set_command(constants.TORCH_TUNE_COMMAND)
+    elif framework == types.TRAINING_HUB:
+        trainer.set_command(constants.TRAINING_HUB_COMMAND)
     elif ml_policy.torch:
         trainer.set_command(constants.TORCH_COMMAND)
     elif ml_policy.mpi:
@@ -253,6 +259,16 @@ def get_resources_per_node(
     return resources
 
 
+def to_k8s_env_vars(env: Optional[Dict[str, str]]) -> Optional[list[models.IoK8sApiCoreV1EnvVar]]:
+    """
+    Convert a simple dict of environment variables into Kubernetes EnvVar models.
+    Returns None if input is falsy to simplify assignment semantics.
+    """
+    if not env:
+        return None
+    return [models.IoK8sApiCoreV1EnvVar(name=key, value=value) for key, value in env.items()]
+
+
 def get_script_for_python_packages(
     packages_to_install: list[str],
     pip_index_url: str,
@@ -350,7 +366,6 @@ def get_command_using_train_func(
 
     return command
 
-
 def get_trainer_crd_from_custom_trainer(
     runtime: types.Runtime,
     trainer: types.CustomTrainer,
@@ -379,10 +394,7 @@ def get_trainer_crd_from_custom_trainer(
     )
 
     # Add environment variables to the Trainer.
-    if trainer.env:
-        trainer_crd.env = [
-            models.IoK8sApiCoreV1EnvVar(name=key, value=value) for key, value in trainer.env.items()
-        ]
+    trainer_crd.env = to_k8s_env_vars(trainer.env)
 
     return trainer_crd
 
@@ -413,6 +425,150 @@ def get_trainer_crd_from_builtin_trainer(
     # the torchtune config in the runtime plugin.
     # Ref:https://github.com/kubeflow/trainer/tree/master/docs/proposals/2401-llm-trainer-v2
     trainer_crd.args = get_args_using_torchtune_config(trainer.config, initializer)
+
+    return trainer_crd
+
+
+def get_trainer_crd_from_training_hub_trainer(
+    runtime: types.Runtime,
+    trainer: types.TrainingHubTrainer,
+) -> models.TrainerV1alpha1Trainer:
+    """
+    Get the Trainer CRD from the TrainingHub trainer.
+    """
+    trainer_crd = models.TrainerV1alpha1Trainer()
+
+    # Derive numNodes and resourcesPerNode from func_args (defaults: 1)
+    # This is the single source of truth for TrainingHubTrainer
+    nnodes = 1
+    nproc_per_node = 1
+    if isinstance(trainer.func_args, dict):
+        if isinstance(trainer.func_args.get("nnodes"), int):
+            nnodes = trainer.func_args["nnodes"]
+        if isinstance(trainer.func_args.get("nproc_per_node"), int):
+            nproc_per_node = trainer.func_args["nproc_per_node"]
+
+    trainer_crd.num_nodes = nnodes
+    trainer_crd.resources_per_node = get_resources_per_node({"gpu": str(nproc_per_node)})
+
+    def _build_install_snippet() -> str:
+        is_mpi = runtime.trainer.command[0] == "mpirun"
+        if trainer.packages_to_install:
+            return get_script_for_python_packages(
+                trainer.packages_to_install,
+                trainer.pip_index_url,
+                is_mpi,
+            )
+        return ""
+
+    # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
+    if trainer.func is None:
+        if not trainer.algorithm:
+            raise ValueError("TrainingHubTrainer requires 'algorithm' when 'func' is not provided")
+
+        algorithm_name = trainer.algorithm.value
+
+        # Build minimal wrapper
+        wrapper_lines = [
+            "def training_func(func_args):",
+            "    import os",
+            f"    from training_hub import {algorithm_name}",
+            "",
+            "    # Verify data_path exists before training",
+            "    _dp = (func_args or {}).get('data_path')",
+            "    if _dp:",
+            "        if os.path.isfile(_dp):",
+            "            print(f\"[PY] Data file found: {_dp}\")",
+            "        else:",
+            "            print(f\"[PY] Data file NOT found: {_dp}\")",
+            "",
+            "    # Read env vars for distributed training",
+            '    master_addr = os.environ.get("PET_MASTER_ADDR", "127.0.0.1")',
+            '    master_port = os.environ.get("PET_MASTER_PORT", "29500")',
+            '    node_rank = int(os.environ.get("PET_NODE_RANK", "0"))',
+            "    rdzv_endpoint = f\"{master_addr}:{master_port}\"",
+            "",
+            "    # Merge func_args with env overrides",
+            "    args = dict(func_args or {})",
+            "    args['node_rank'] = node_rank",
+            "    args['rdzv_endpoint'] = rdzv_endpoint",
+            f"    print(\"[PY] Launching {algorithm_name.upper()} training...\")",
+            "    try:",
+            f"        result = {algorithm_name}(**args)",
+            f"        print(\"[PY] {algorithm_name.upper()} training complete. Result=\", result)",
+            "    except ValueError as e:",
+            "        print(f\"Configuration error: {e}\")",
+            "    except Exception as e:",
+            "        import traceback",
+            "        print(\"[PY] Training failed with error:\", e)",
+            "        traceback.print_exc()",
+            "",
+            "    print('[PY] Training finished successfully.')",
+            "",
+        ]
+
+        # Render training_func call with one parameter per line for readability
+        if trainer.func_args is None:
+            call_line = "training_func({})"
+        else:
+            if isinstance(trainer.func_args, dict):
+                params_lines: list[str] = ["training_func({"]
+                for _k, _v in trainer.func_args.items():
+                    params_lines.append(f"    {repr(_k)}: {repr(_v)},")
+                params_lines.append("})")
+                call_line = "\n".join(params_lines)
+            else:
+                call_line = f"training_func({trainer.func_args})"
+
+        wrapper_lines.append(call_line)
+        raw_code = "\n".join(wrapper_lines) + "\n"
+
+        # Compose full script: install snippet + heredoc execution of the wrapper code
+        exec_script = constants.EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "python").format(
+            func_code=raw_code,
+            func_file="training_script.py",
+        )
+        full_script = _build_install_snippet() + exec_script
+
+        # Set command/args per working example
+        trainer_crd.command = ["bash", "-c"]
+        trainer_crd.args = [full_script]
+    else:
+        # Secondary case: user provided function; embed their function and call with kwargs
+        # Extract and format function source
+        if not callable(trainer.func):
+            raise ValueError(
+                f"Training function must be callable, got function type: {type(trainer.func)}"
+            )
+
+        func_code = inspect.getsource(trainer.func)
+        func_code = textwrap.dedent(func_code)
+
+        # Append the invocation; unpack kwargs and format with one parameter per line
+        if trainer.func_args is None:
+            func_code = f"{func_code}\n{trainer.func.__name__}()\n"
+        else:
+            if isinstance(trainer.func_args, dict):
+                params_lines: list[str] = [f"{trainer.func.__name__}({{"]
+                for _k, _v in trainer.func_args.items():
+                    params_lines.append(f"    {repr(_k)}: {repr(_v)},")
+                params_lines.append("})")
+                call_line = "\n".join(params_lines)
+                func_code = f"{func_code}\n{call_line}\n"
+            else:
+                func_code = f"{func_code}\n{trainer.func.__name__}({trainer.func_args})\n"
+
+        exec_script = constants.EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "python").format(
+            func_code=func_code,
+            func_file=os.path.basename(inspect.getfile(trainer.func)),
+        )
+        full_script = _build_install_snippet() + exec_script
+
+        trainer_crd.command = ["bash", "-c"]
+        trainer_crd.args = [full_script]
+
+    # Add environment variables to the Trainer if provided by user (no defaults for algorithm)
+    trainer_crd.env = to_k8s_env_vars(trainer.env)
 
     return trainer_crd
 

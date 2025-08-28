@@ -180,7 +180,13 @@ class KubernetesBackend(ExecutionBackend):
         self,
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
-        trainer: Optional[Union[types.CustomTrainer, types.BuiltinTrainer]] = None,
+        trainer: Optional[
+            Union[
+                types.CustomTrainer,
+                types.BuiltinTrainer,
+                types.TrainingHubTrainer,
+            ]
+        ] = None,
     ) -> str:
         if runtime is None:
             runtime = self.get_runtime(constants.TORCH_RUNTIME)
@@ -207,19 +213,77 @@ class KubernetesBackend(ExecutionBackend):
                     runtime, trainer, initializer
                 )
 
+            # If users choose to use a TrainingHub trainer.
+            elif isinstance(trainer, types.TrainingHubTrainer):
+                if runtime.trainer.trainer_type != types.TrainerType.TRAINING_HUB_TRAINER:
+                    raise ValueError(f"TrainingHubTrainer can't be used with {runtime} runtime")
+                trainer_crd = utils.get_trainer_crd_from_training_hub_trainer(runtime, trainer)
+
             else:
                 raise ValueError(
                     f"The trainer type {type(trainer)} is not supported. "
-                    "Please use CustomTrainer or BuiltinTrainer."
+                    "Please use CustomTrainer, TrainingHubTrainer, or BuiltinTrainer."
                 )
+
+        # Build optional PodSpecOverrides from trainer (volumes and volumeMounts)
+        pod_spec_overrides = None
+        if isinstance(trainer, (types.CustomTrainer, types.TrainingHubTrainer)) and (
+            getattr(trainer, "volumes", None) or getattr(trainer, "volume_mounts", None)
+        ):
+            containers = None
+            if getattr(trainer, "volume_mounts", None):
+                ContainerOverrideModel = getattr(models, "TrainerV1alpha1ContainerOverride", None)
+                if ContainerOverrideModel is not None:
+                    containers = [
+                        ContainerOverrideModel(
+                            name=constants.NODE,
+                            volume_mounts=list(trainer.volume_mounts),
+                        )
+                    ]
+                else:
+                    containers = [
+                        {
+                            "name": constants.NODE,
+                            "volume_mounts": list(trainer.volume_mounts),
+                        }
+                    ]
+
+            # Resolve TargetJobs model across API variations
+            # TODO: revisit this logic, probably not required.
+            _target_job_class = None
+            for _name in (
+                "TrainerV1alpha1PodSpecOverrideTargetJob",
+                "TrainerV1alpha1PodSpecOverrideTargetJobs",
+                "TrainerV1alpha1TargetJob",
+                "TrainerV1alpha1TargetJobs",
+            ):
+                _target_job_class = getattr(models, _name, None)
+                if _target_job_class is not None:
+                    break
+
+            if _target_job_class is not None:
+                target_jobs = [_target_job_class(name=constants.NODE)]
+            else:
+                target_jobs = [{"name": constants.NODE}]
+
+            pod_spec_overrides = [
+                models.TrainerV1alpha1PodSpecOverride(
+                    target_jobs=target_jobs,
+                    volumes=list(getattr(trainer, "volumes", []) or []),
+                    containers=containers,
+                )
+            ]
 
         train_job = models.TrainerV1alpha1TrainJob(
             apiVersion=constants.API_VERSION,
             kind=constants.TRAINJOB_KIND,
-            metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(name=train_job_name),
+            metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+                name=train_job_name,
+            ),
             spec=models.TrainerV1alpha1TrainJobSpec(
                 runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
                 trainer=(trainer_crd if trainer_crd != models.TrainerV1alpha1Trainer() else None),
+                podSpecOverrides=pod_spec_overrides,
                 initializer=(
                     models.TrainerV1alpha1Initializer(
                         dataset=utils.get_dataset_initializer(initializer.dataset),

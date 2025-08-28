@@ -59,6 +59,7 @@ DEFAULT_NAMESPACE = "default"
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"
 TORCH_TUNE_RUNTIME = "torchtune"
+TRAINING_HUB_RUNTIME = "training-hub"
 
 # 2 nodes * 2 nproc
 RUNTIME_DEVICES = "4"
@@ -251,6 +252,86 @@ def get_builtin_trainer() -> models.TrainerV1alpha1Trainer:
         args=["batch_size=2", "epochs=2", "loss=Loss.CEWithChunkedOutputLoss"],
         command=["tune", "run"],
         numNodes=2,
+    )
+
+
+def get_training_hub_trainer_builtin_algorithm() -> models.TrainerV1alpha1Trainer:
+    """
+    Get the training hub trainer (primary case) for the TrainJob.
+    """
+    script = (
+        "\nread -r -d '' SCRIPT << EOM\n\n"
+        "def training_func(func_args):\n"
+        "    import os\n"
+        "    from training_hub import sft\n\n"
+        "    # Verify data_path exists before training\n"
+        "    _dp = (func_args or {}).get('data_path')\n"
+        "    if _dp:\n"
+        "        if os.path.isfile(_dp):\n"
+        "            print(f\"[PY] Data file found: {_dp}\")\n"
+        "        else:\n"
+        "            print(f\"[PY] Data file NOT found: {_dp}\")\n\n"
+        "    # Read env vars for distributed training\n"
+        '    master_addr = os.environ.get("PET_MASTER_ADDR", "127.0.0.1")\n'
+        '    master_port = os.environ.get("PET_MASTER_PORT", "29500")\n'
+        '    node_rank = int(os.environ.get("PET_NODE_RANK", "0"))\n'
+        "    rdzv_endpoint = f\"{master_addr}:{master_port}\"\n\n"
+        "    # Merge func_args with env overrides\n"
+        "    args = dict(func_args or {})\n"
+        "    args['node_rank'] = node_rank\n"
+        "    args['rdzv_endpoint'] = rdzv_endpoint\n"
+        "    print(\"[PY] Launching SFT training...\")\n"
+        "    try:\n"
+        "        result = sft(**args)\n"
+        "        print(\"[PY] SFT training complete. Result=\", result)\n"
+        "    except ValueError as e:\n"
+        "        print(f\"Configuration error: {e}\")\n"
+        "    except Exception as e:\n"
+        "        import traceback\n"
+        "        print(\"[PY] Training failed with error:\", e)\n"
+        "        traceback.print_exc()\n\n"
+        "    print('[PY] Training finished successfully.')\n\n"
+        "training_func({\n"
+        "    'lr': 0.01,\n"
+        "    'nnodes': 2,\n"
+        "})\n\n"
+        "EOM\nprintf \"%s\" \"$SCRIPT\" > \"training_script.py\"\npython \"training_script.py\""
+    )
+
+    return models.TrainerV1alpha1Trainer(
+        command=["bash", "-c"],
+        args=[script],
+        numNodes=2,
+        resourcesPerNode=models.IoK8sApiCoreV1ResourceRequirements(
+            requests={"nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity("1")},
+            limits={"nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity("1")},
+        ),
+    )
+
+
+def get_th_trainer_with_custom_func() -> models.TrainerV1alpha1Trainer:
+    """
+    Get the training hub trainer (secondary case) for the TrainJob.
+    """
+    script = (
+        "\nread -r -d '' SCRIPT << EOM\n\n"
+        "func=lambda x, y: print(x + y),\n\n"
+        "<lambda>({\n"
+        "    'x': 1,\n"
+        "    'y': 2,\n"
+        "    'nnodes': 2,\n"
+        "})\n\n"
+        "EOM\nprintf \"%s\" \"$SCRIPT\" > \"backend_test.py\"\npython \"backend_test.py\""
+    )
+
+    return models.TrainerV1alpha1Trainer(
+        command=["bash", "-c"],
+        args=[script],
+        numNodes=2,
+        resourcesPerNode=models.IoK8sApiCoreV1ResourceRequirements(
+            requests={"nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity("1")},
+            limits={"nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity("1")},
+        ),
     )
 
 
@@ -458,11 +539,15 @@ def create_cluster_training_runtime(
             labels={constants.RUNTIME_FRAMEWORK_LABEL: name},
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
-            mlPolicy=models.TrainerV1alpha1MLPolicy(
-                torch=models.TrainerV1alpha1TorchMLPolicySource(
-                    numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2)
-                ),
-                numNodes=2,
+            mlPolicy=(
+                models.TrainerV1alpha1MLPolicy(
+                    torch=models.TrainerV1alpha1TorchMLPolicySource(
+                        numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2)
+                    ),
+                    numNodes=2,
+                )
+                if name != TRAINING_HUB_RUNTIME
+                else models.TrainerV1alpha1MLPolicy(numNodes=2)
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
                 metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
@@ -505,14 +590,34 @@ def create_runtime_type(
     name: str,
 ) -> types.Runtime:
     """Create a mock Runtime object for testing."""
-    trainer = types.RuntimeTrainer(
-        trainer_type=types.TrainerType.CUSTOM_TRAINER,
-        framework=name,
-        num_nodes=2,
-        device="gpu",
-        device_count=RUNTIME_DEVICES,
-    )
-    trainer.set_command(constants.TORCH_COMMAND)
+    # Map expected command/type based on framework
+    if name == TORCH_TUNE_RUNTIME:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.BUILTIN_TRAINER,
+            framework=name,
+            num_nodes=2,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+        )
+        trainer.set_command(constants.TORCH_TUNE_COMMAND)
+    elif name == TRAINING_HUB_RUNTIME:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.TRAINING_HUB_TRAINER,
+            framework=name,
+            num_nodes=2,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+        )
+        trainer.set_command(constants.TRAINING_HUB_COMMAND)
+    else:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework=name,
+            num_nodes=2,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+        )
+        trainer.set_command(constants.TORCH_COMMAND)
     return types.Runtime(
         name=name,
         pretrained_model=None,
@@ -526,14 +631,33 @@ def get_train_job_data_type(
 ) -> types.TrainJob:
     """Create a mock TrainJob object with the expected structure for testing."""
 
-    trainer = types.RuntimeTrainer(
-        trainer_type=types.TrainerType.CUSTOM_TRAINER,
-        framework=runtime_name,
-        device="gpu",
-        device_count=RUNTIME_DEVICES,
-        num_nodes=2,
-    )
-    trainer.set_command(constants.TORCH_COMMAND)
+    if runtime_name == TORCH_TUNE_RUNTIME:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.BUILTIN_TRAINER,
+            framework=runtime_name,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+            num_nodes=2,
+        )
+        trainer.set_command(constants.TORCH_TUNE_COMMAND)
+    elif runtime_name == TRAINING_HUB_RUNTIME:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.TRAINING_HUB_TRAINER,
+            framework=runtime_name,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+            num_nodes=2,
+        )
+        trainer.set_command(constants.TRAINING_HUB_COMMAND)
+    else:
+        trainer = types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework=runtime_name,
+            device="gpu",
+            device_count=RUNTIME_DEVICES,
+            num_nodes=2,
+        )
+        trainer.set_command(constants.TORCH_COMMAND)
     return types.TrainJob(
         name=train_job_name,
         creation_timestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
@@ -713,6 +837,38 @@ def test_get_runtime_packages(trainer_client, test_case):
                 runtime_name=TORCH_TUNE_RUNTIME,
                 train_job_name=TRAIN_JOB_WITH_BUILT_IN_TRAINER,
                 train_job_trainer=get_builtin_trainer(),
+            ),
+        ),
+        TestCase(
+            name="valid flow with training hub trainer (built in algorithm)",
+            expected_status=SUCCESS,
+            config={
+                "trainer": types.TrainingHubTrainer(
+                    func_args={"lr": 0.01, "nnodes": 2},
+                    algorithm=types.TrainingHubAlgorithms.SFT,
+                ),
+                "runtime": TRAINING_HUB_RUNTIME,
+            },
+            expected_output=get_train_job(
+                runtime_name=TRAINING_HUB_RUNTIME,
+                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
+                train_job_trainer=get_training_hub_trainer_builtin_algorithm(),
+            ),
+        ),
+        TestCase(
+            name="valid flow with training hub trainer (custom function)",
+            expected_status=SUCCESS,
+            config={
+                "trainer": types.TrainingHubTrainer(
+                    func=lambda x, y: print(x + y),
+                    func_args={"x": 1, "y": 2, "nnodes": 2},
+                ),
+                "runtime": TRAINING_HUB_RUNTIME,
+            },
+            expected_output=get_train_job(
+                runtime_name=TRAINING_HUB_RUNTIME,
+                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
+                train_job_trainer=get_th_trainer_with_custom_func(),
             ),
         ),
         TestCase(
