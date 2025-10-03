@@ -28,7 +28,6 @@ dependencies = [
   "kubernetes>=27.2.0",
   "pydantic>=2.10.0",
   "kubeflow-trainer-api>=2.0.0",
-  "training_hub@git+https://github.com/Red-Hat-AI-Innovation-Team/training_hub.git@main"
 ]
 
 [dependency-groups]
