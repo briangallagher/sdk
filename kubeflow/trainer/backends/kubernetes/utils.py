@@ -247,9 +247,8 @@ def get_script_for_python_packages(
     # first url will be the index-url.
     options = [f"--index-url {pip_index_urls[0]}"]
     options.extend(f"--extra-index-url {extra_index_url}" for extra_index_url in pip_index_urls[1:])
-    # For the OpenMPI, the packages must be installed for the mpiuser.
-    if is_mpi:
-        options.append("--user")
+    # Always install for the user to avoid permission issues across environments.
+    options.append("--user")
 
     header_script = textwrap.dedent(
         """

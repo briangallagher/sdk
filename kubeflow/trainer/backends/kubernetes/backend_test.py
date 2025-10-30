@@ -217,6 +217,7 @@ def get_custom_trainer(
     """
     pip_command = [f"--index-url {pip_index_urls[0]}"]
     pip_command.extend([f"--extra-index-url {repo}" for repo in pip_index_urls[1:]])
+    pip_command.append("--user")
     pip_command = " ".join(pip_command)
 
     packages_command = " ".join(packages_to_install)
