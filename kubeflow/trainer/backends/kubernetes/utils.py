@@ -268,6 +268,7 @@ def get_script_for_python_packages(
     # first url will be the index-url.
     options = [f"--index-url {pip_index_urls[0]}"]
     options.extend(f"--extra-index-url {extra_index_url}" for extra_index_url in pip_index_urls[1:])
+    options_str = " ".join(options)
 
     header_script = textwrap.dedent(
         """
@@ -278,18 +279,28 @@ def get_script_for_python_packages(
         """
     )
 
-    script_for_python_packages = (
-        header_script
-        + "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
-        + "--no-warn-script-location {} --user {}".format(
-            " ".join(options),
-            packages_str,
-        )
-        + " ||\nPIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
-        + "--no-warn-script-location {} {}\n".format(
-            " ".join(options),
-            packages_str,
-        )
+    # First try per-user installation, then fall back to system-wide installation.
+    # Pip output is captured to a log file and only printed when both attempts fail;
+    # on success we emit a single concise confirmation line.
+    script_for_python_packages = header_script + textwrap.dedent(
+        f"""
+        PACKAGES="{packages_str}"
+        PIP_OPTS="{options_str}"
+        LOG_FILE=/tmp/pip_install.log
+        rm -f "$LOG_FILE"
+
+        if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\
+            --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then
+            echo "Successfully installed Python packages: $PACKAGES"
+        elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\
+            --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then
+            echo "Successfully installed Python packages: $PACKAGES"
+        else
+            echo "ERROR: Failed to install Python packages: $PACKAGES" >&2
+            cat "$LOG_FILE" >&2
+        fi
+
+        """
     )
 
     return script_for_python_packages

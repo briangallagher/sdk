@@ -223,26 +223,30 @@ def get_custom_trainer(
     """
     Get the custom trainer for the TrainJob.
     """
-    pip_command = [f"--index-url {pip_index_urls[0]}"]
-    pip_command.extend([f"--extra-index-url {repo}" for repo in pip_index_urls[1:]])
-    pip_command = " ".join(pip_command)
+    # Use the same helper as production code to build the pip install script so
+    # tests stay in sync with the runtime behavior.
+    install_script = utils.get_script_for_python_packages(
+        packages_to_install=packages_to_install,
+        pip_index_urls=pip_index_urls,
+    )
 
-    packages_command = " ".join(packages_to_install)
+    # Append the embedded training function script that matches EXEC_FUNC_SCRIPT
+    # with torchrun as the entrypoint and a fixed lambda for deterministic tests.
+    func_script = (
+        "\nread -r -d '' SCRIPT << EOM\n\n"
+        'func=lambda: print("Hello World"),\n\n'
+        "<lambda>(**{'learning_rate': 0.001, 'batch_size': 32})\n\n"
+        'EOM\nprintf "%s" "$SCRIPT" > "backend_test.py"\n'
+        'torchrun "backend_test.py"'
+    )
+
+    full_command = install_script + func_script
+
     return models.TrainerV1alpha1Trainer(
         command=[
             "bash",
             "-c",
-            '\nif ! [ -x "$(command -v pip)" ]; then\n    python -m ensurepip '
-            "|| python -m ensurepip --user || apt-get install python-pip"
-            "\nfi\n\n"
-            "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet"
-            f" --no-warn-script-location {pip_command} --user {packages_command}"
-            " ||\nPIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet"
-            f" --no-warn-script-location {pip_command} {packages_command}"
-            "\n\nread -r -d '' SCRIPT << EOM\n\nfunc=lambda: "
-            'print("Hello World"),\n\n<lambda>(**'
-            "{'learning_rate': 0.001, 'batch_size': 32})\n\nEOM\nprintf \"%s\" "
-            '"$SCRIPT" > "backend_test.py"\ntorchrun "backend_test.py"',
+            full_command,
         ],
         numNodes=2,
         env=env,
