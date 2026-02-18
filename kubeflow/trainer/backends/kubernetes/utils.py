@@ -293,11 +293,12 @@ def get_script_for_python_packages(
             --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then
             echo "Successfully installed Python packages: $PACKAGES"
         elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\
-            --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then
+            --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then
             echo "Successfully installed Python packages: $PACKAGES"
         else
             echo "ERROR: Failed to install Python packages: $PACKAGES" >&2
             cat "$LOG_FILE" >&2
+            exit 1
         fi
 
         """

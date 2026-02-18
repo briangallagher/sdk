@@ -161,11 +161,12 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then\n'
+                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
                 '    cat "$LOG_FILE" >&2\n'
+                "    exit 1\n"
                 "fi\n\n"
             ),
         ),
@@ -190,11 +191,12 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then\n'
+                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
                 '    cat "$LOG_FILE" >&2\n'
+                "    exit 1\n"
                 "fi\n\n"
             ),
         ),
@@ -223,11 +225,12 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then\n'
+                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
                 '    cat "$LOG_FILE" >&2\n'
+                "    exit 1\n"
                 "fi\n\n"
             ),
         ),
@@ -253,11 +256,12 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >"$LOG_FILE" 2>&1; then\n'
+                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
                 '    echo "Successfully installed Python packages: $PACKAGES"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
                 '    cat "$LOG_FILE" >&2\n'
+                "    exit 1\n"
                 "fi\n\n"
             ),
         ),
