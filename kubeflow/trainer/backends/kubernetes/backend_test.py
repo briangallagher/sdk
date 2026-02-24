@@ -228,6 +228,7 @@ def get_custom_trainer(
     install_script = utils.get_script_for_python_packages(
         packages_to_install=packages_to_install,
         pip_index_urls=pip_index_urls,
+        install_log_file="pip_install.log",
     )
 
     # Append the embedded training function script that matches EXEC_FUNC_SCRIPT
