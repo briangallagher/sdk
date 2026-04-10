@@ -27,7 +27,7 @@ import threading
 import time
 
 from kubeflow_spark_api import models
-from kubernetes import client, config
+from kubernetes import client
 from pyspark.sql import SparkSession
 
 from kubeflow.common import constants as common_constants
@@ -69,18 +69,11 @@ class KubernetesBackend(RuntimeBackend):
         """Initialize Kubernetes Spark backend."""
         self.namespace = backend_config.namespace or "default"
 
-        if backend_config.config_file:
-            config.load_kube_config(config_file=backend_config.config_file)
-        elif backend_config.context:
-            config.load_kube_config(context=backend_config.context)
-        else:
-            try:
-                config.load_incluster_config()
-            except config.ConfigException:
-                config.load_kube_config()
+        from kubeflow.common.auth import get_kubernetes_client
 
-        self.custom_api = client.CustomObjectsApi()
-        self.core_api = client.CoreV1Api()
+        k8s_client = get_kubernetes_client(backend_config)
+        self.custom_api = client.CustomObjectsApi(k8s_client)
+        self.core_api = client.CoreV1Api(k8s_client)
 
     def _extract_name_option(self, options: list | None) -> tuple[str, list]:
         """Extract Name option from options list, or generate name if absent.

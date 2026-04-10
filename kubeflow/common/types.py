@@ -23,5 +23,26 @@ class KubernetesBackendConfig(BaseModel):
     context: str | None = None
     client_configuration: client.Configuration | None = None
 
+    # kube-authkit authentication fields
+    auth_method: str | None = None  # "auto", "kubeconfig", "incluster", "oidc", "openshift"
+    k8s_api_host: str | None = None
+    kubeconfig_path: str | None = None
+
+    # OIDC configuration
+    oidc_issuer: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    scopes: list[str] | None = None
+    use_device_flow: bool = False
+    oidc_callback_port: int = 8080
+
+    # Token-based authentication
+    token: str | None = None
+
+    # Advanced options
+    use_keyring: bool = False
+    verify_ssl: bool = True
+    ca_cert: str | None = None
+
     class Config:
         arbitrary_types_allowed = True

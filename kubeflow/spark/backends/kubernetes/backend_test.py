@@ -48,7 +48,10 @@ from kubeflow.spark.types.types import SparkConnectInfo, SparkConnectState
 def kubernetes_backend():
     """Provide KubernetesBackend with mocked K8s APIs."""
     with (
-        patch("kubernetes.config.load_kube_config", return_value=None),
+        patch(
+            "kubeflow.common.auth.kube_authkit_bridge.kube_authkit_get_client",
+            return_value=Mock(),
+        ),
         patch(
             "kubernetes.client.CustomObjectsApi",
             return_value=Mock(

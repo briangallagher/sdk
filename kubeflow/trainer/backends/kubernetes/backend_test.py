@@ -85,7 +85,10 @@ TRAIN_JOB_WITH_CUSTOM_TRAINER = "train-job-with-custom-trainer"
 def kubernetes_backend(request):
     """Provide a KubernetesBackend with mocked Kubernetes APIs."""
     with (
-        patch("kubernetes.config.load_kube_config", return_value=None),
+        patch(
+            "kubeflow.common.auth.kube_authkit_bridge.kube_authkit_get_client",
+            return_value=Mock(),
+        ),
         patch(
             "kubernetes.client.CustomObjectsApi",
             return_value=Mock(
@@ -766,7 +769,10 @@ def _run_verify_backend_with_core_api(core_api: Mock) -> tuple[list[str], int]:
 
     try:
         with (
-            patch("kubernetes.config.load_kube_config", return_value=None),
+            patch(
+            "kubeflow.common.auth.kube_authkit_bridge.kube_authkit_get_client",
+            return_value=Mock(),
+        ),
             patch("kubeflow.common.utils.is_running_in_k8s", return_value=False),
             patch("kubernetes.client.ApiClient", return_value=Mock()),
             patch("kubernetes.client.CustomObjectsApi", return_value=Mock()),
