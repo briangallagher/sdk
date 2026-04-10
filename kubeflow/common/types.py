@@ -13,8 +13,22 @@
 # limitations under the License.
 
 
+import abc
+
 from kubernetes import client
 from pydantic import BaseModel
+
+
+class TokenCredentialsBase(abc.ABC):
+    """Base class for pluggable credential providers with automatic token refresh.
+
+    Implement refresh_api_key_hook to provide custom token refresh logic.
+    The hook is called before each Kubernetes API request.
+    """
+
+    @abc.abstractmethod
+    def refresh_api_key_hook(self, config: client.Configuration) -> None:
+        raise NotImplementedError()
 
 
 class KubernetesBackendConfig(BaseModel):
@@ -22,6 +36,11 @@ class KubernetesBackendConfig(BaseModel):
     config_file: str | None = None
     context: str | None = None
     client_configuration: client.Configuration | None = None
+    token: str | None = None
+    server: str | None = None
+    verify_ssl: bool = True
+    ca_cert: str | None = None
+    credentials: TokenCredentialsBase | None = None
 
     class Config:
         arbitrary_types_allowed = True
