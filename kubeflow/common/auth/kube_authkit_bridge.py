@@ -14,6 +14,10 @@
 
 """Authentication bridge between KubernetesBackendConfig and kube-authkit."""
 
+# Kubeflow backends share KubernetesBackendConfig; kube-authkit expects AuthConfig.
+# This file maps between those shapes and picks a resolution strategy. Token exchange,
+# kubeconfig parsing, and ApiClient construction live in kube-authkit, not here.
+
 import logging
 
 from kubernetes import client
@@ -33,11 +37,22 @@ logger = logging.getLogger(__name__)
 def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
     """Build a Kubernetes ApiClient using kube-authkit.
 
-    Resolution order:
-    1. Pre-built client_configuration (escape hatch)
-    2. Explicit auth_method with kube-authkit parameters
-    3. Legacy config_file/context (mapped to kubeconfig with deprecation warning)
-    4. Auto-detection (default)
+    Resolution order (first match wins after the import guard):
+
+    1. **Pre-built ``client_configuration``** — caller already has a
+       ``kubernetes.client.Configuration`` (e.g. custom transport). Returned as
+       ``ApiClient`` without invoking kube-authkit.
+
+    2. **Explicit ``auth_method``** — OIDC, OpenShift token, kubeconfig path,
+       in-cluster, etc. Backend-specific fields are folded into ``AuthConfig``;
+       kube-authkit performs login and builds the client.
+
+    3. **Legacy ``config_file`` / ``context``** — backward compatible with older
+       Kubeflow SDK options. Emits a deprecation log; ``config_file`` is mapped to
+       ``kubeconfig_path``. ``context`` is not forwarded (use kube-authkit-supported
+       mechanisms via ``kubeconfig_path`` / explicit method instead).
+
+    4. **Neither** — ``method="auto"`` so kube-authkit chooses how to authenticate.
 
     Raises:
         ImportError: If kube-authkit is not installed.
@@ -48,10 +63,12 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
             "Install it with: pip install kube-authkit"
         )
 
+    # Escape hatch: skip AuthConfig entirely when the caller owns Configuration.
     if cfg.client_configuration is not None:
         logger.debug("Using provided client_configuration")
         return client.ApiClient(cfg.client_configuration)
 
+    # Common TLS / endpoint hints applied for any kube-authkit path below.
     auth_params: dict = {"verify_ssl": cfg.verify_ssl}
 
     if cfg.k8s_api_host is not None:
@@ -64,6 +81,7 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
     if cfg.auth_method is not None:
         auth_params["method"] = cfg.auth_method
 
+        # OIDC-specific knobs; other methods ignore these keys if present in AuthConfig.
         if cfg.auth_method == "oidc":
             auth_params["oidc_issuer"] = cfg.oidc_issuer
             auth_params["client_id"] = cfg.client_id
