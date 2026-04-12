@@ -40,7 +40,7 @@ Resolution order (first match wins)
 5. **Environment OIDC client credentials** — ``KUBEFLOW_OIDC_ISSUER``,
    ``KUBEFLOW_OIDC_CLIENT_ID``, ``KUBEFLOW_OIDC_CLIENT_SECRET``, and
    ``KUBEFLOW_API_HOST`` build :class:`kubernetes_oidc.OIDCClientCredentials`
-   (RFC 6749 §4.4). Requires ``pip install kubeflow[oidc]``.
+   (RFC 6749 section 4.4). Requires ``pip install kubeflow[oidc]``.
 
 6. **Kubeconfig file** — local dev and shared clusters via ``config_file`` /
    ``context`` (or default kubeconfig when not in-cluster).
@@ -152,4 +152,6 @@ def load_kubernetes_config(cfg: KubernetesBackendConfig) -> client.ApiClient:
     else:
         config.load_incluster_config()
 
+    # ``cfg.client_configuration`` is unset; the client uses the default Configuration
+    # populated by ``load_kube_config`` / ``load_incluster_config``.
     return client.ApiClient(cfg.client_configuration)

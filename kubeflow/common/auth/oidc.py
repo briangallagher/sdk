@@ -44,9 +44,15 @@ class _OIDCBaseCredentials(TokenCredentialsBase):
         resp.raise_for_status()
         token_data = resp.json()
         self._access_token = token_data["access_token"]
+        # Refresh slightly before ``expires_in`` so concurrent requests rarely hit 401s.
         self._expires_at = time.time() + token_data.get("expires_in", 300) - 30
 
     def refresh_api_key_hook(self, config: client.Configuration) -> None:
+        """Kubernetes client hook: refresh token material on ``Configuration`` before requests.
+
+        Calls ``_do_token_exchange`` only when ``time.time() >= _expires_at``; always sets
+        Bearer ``api_key`` / ``api_key_prefix`` from the current access token.
+        """
         if time.time() >= self._expires_at:
             self._do_token_exchange()
         config.api_key["authorization"] = self._access_token

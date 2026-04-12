@@ -43,6 +43,7 @@ class KubernetesBackendConfig(BaseModel):
     server: str | None = None
     verify_ssl: bool = True
     ca_cert: str | None = None
+    # When set, ``server`` must also be set; wired via ``auth_utils.load_kubernetes_config``.
     credentials: TokenCredentialsBase | None = None
 
     class Config:

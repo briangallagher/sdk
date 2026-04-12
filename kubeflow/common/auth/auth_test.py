@@ -12,19 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for Kubernetes auth resolution and optional kubernetes-oidc integration."""
+"""Unit tests for Kubernetes auth helpers and OIDC credential providers."""
 
 from __future__ import annotations
 
 import builtins
+import contextlib
 import os
 import sys
 import types
 from unittest.mock import patch
+from urllib.parse import parse_qs
 
 from kubernetes import client
 import pytest
+import responses
 
+import kubeflow.common.auth.oidc as kf_oidc
+from kubeflow.common.auth.oidc import OIDCClientCredentials, OIDCPasswordCredentials
 from kubeflow.common.auth_utils import load_kubernetes_config
 from kubeflow.common.types import KubernetesBackendConfig, TokenCredentialsBase
 
@@ -39,6 +44,39 @@ class _DummyTokenCreds(TokenCredentialsBase):
         self.hook_calls += 1
         configuration.api_key["authorization"] = "dummy-access-token"
         configuration.api_key_prefix["authorization"] = "Bearer"
+
+def _http_request_body(body: bytes | str | None) -> str:
+    if body is None:
+        return ""
+    return body.decode() if isinstance(body, bytes) else body
+
+
+class _KubernetesOidcShim:
+    def __init__(
+        self,
+        issuer_url: str,
+        client_id: str,
+        client_secret: str,
+        scopes: list[str] | None = None,
+        verify: bool = True,
+    ) -> None:
+        del scopes, verify
+        inner = kf_oidc.OIDCClientCredentials(issuer_url, client_id, client_secret)
+        self.refresh_api_key_hook = inner.refresh_api_key_hook
+
+
+def _kubernetes_oidc_shim_module():
+    import types as std_types
+    m = std_types.ModuleType("kubernetes_oidc")
+    m.OIDCClientCredentials = _KubernetesOidcShim
+    return m
+
+
+@pytest.fixture(autouse=True)
+def _reset_responses_registry() -> None:
+    with contextlib.suppress(Exception):
+        responses.reset()
+    yield
 
 
 @pytest.fixture
@@ -356,3 +394,141 @@ def test_kubeflow_oidc_scopes_passed_to_oidc_constructor(clear_kubeflow_env, mon
     monkeypatch.delitem(sys.modules, "kubernetes_oidc", raising=False)
 
     assert inits[0].get("scopes") == ["openid", "profile", "email"]
+
+@responses.activate
+def test_oidc_client_credentials_discovery_and_exchange_on_init() -> None:
+    responses.get(
+        "https://issuer-disco/.well-known/openid-configuration",
+        json={"token_endpoint": "https://issuer-disco/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-disco/token",
+        json={"access_token": "at1", "expires_in": 300},
+        status=200,
+    )
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-disco/",
+        client_id="my-id",
+        client_secret="my-secret",
+    )
+    posts = [c for c in responses.calls if c.request.method == "POST"]
+    assert len(posts) == 1
+    params = parse_qs(_http_request_body(posts[0].request.body))
+    assert params["grant_type"] == ["client_credentials"]
+    conf = client.Configuration()
+    creds.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "at1"
+
+
+@responses.activate
+def test_oidc_client_credentials_hook_skips_exchange_while_valid() -> None:
+    responses.get(
+        "https://issuer-skip/.well-known/openid-configuration",
+        json={"token_endpoint": "https://issuer-skip/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-skip/token",
+        json={"access_token": "at1", "expires_in": 3600},
+        status=200,
+    )
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-skip/",
+        client_id="cid",
+        client_secret="sec",
+    )
+    posts_after_init = [c for c in responses.calls if c.request.method == "POST"]
+    creds._expires_at = float("inf")
+    conf = client.Configuration()
+    creds.refresh_api_key_hook(conf)
+    posts_after_hook = [c for c in responses.calls if c.request.method == "POST"]
+    assert len(posts_after_hook) == len(posts_after_init)
+
+
+@responses.activate
+def test_oidc_client_credentials_hook_re_exchanges_when_expired() -> None:
+    responses.get(
+        "https://issuer-reex/.well-known/openid-configuration",
+        json={"token_endpoint": "https://issuer-reex/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-reex/token",
+        json={"access_token": "first", "expires_in": 100},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-reex/token",
+        json={"access_token": "second", "expires_in": 100},
+        status=200,
+    )
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-reex/",
+        client_id="cid",
+        client_secret="sec",
+    )
+    assert len([c for c in responses.calls if c.request.method == "POST"]) == 1
+    creds._expires_at = 0.0
+    conf = client.Configuration()
+    creds.refresh_api_key_hook(conf)
+    assert len([c for c in responses.calls if c.request.method == "POST"]) == 2
+    assert conf.api_key["authorization"] == "second"
+
+
+@responses.activate
+def test_oidc_password_credentials_grant_and_hook() -> None:
+    responses.get(
+        "https://issuer-pw/.well-known/openid-configuration",
+        json={"token_endpoint": "https://issuer-pw/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-pw/token",
+        json={"access_token": "pw-at", "expires_in": 120},
+        status=200,
+    )
+    creds = OIDCPasswordCredentials(
+        issuer_url="https://issuer-pw/",
+        client_id="cid",
+        username="alice",
+        password="wonderland",
+    )
+    posts = [c for c in responses.calls if c.request.method == "POST"]
+    assert len(posts) == 1
+    params = parse_qs(_http_request_body(posts[0].request.body))
+    assert params["grant_type"] == ["password"]
+    conf = client.Configuration()
+    creds.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "pw-at"
+
+
+@responses.activate
+def test_oidc_password_refresh_hook_reloads_when_expired() -> None:
+    responses.get(
+        "https://issuer-pwre/.well-known/openid-configuration",
+        json={"token_endpoint": "https://issuer-pwre/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-pwre/token",
+        json={"access_token": "a", "expires_in": 50},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-pwre/token",
+        json={"access_token": "b", "expires_in": 50},
+        status=200,
+    )
+    creds = OIDCPasswordCredentials(
+        issuer_url="https://issuer-pwre/",
+        client_id="cid",
+        username="u",
+        password="p",
+    )
+    creds._expires_at = 0.0
+    conf = client.Configuration()
+    creds.refresh_api_key_hook(conf)
+    assert len([c for c in responses.calls if c.request.method == "POST"]) == 2
+    assert conf.api_key["authorization"] == "b"
+
