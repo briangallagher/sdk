@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import abc
 
 from kubernetes import client
@@ -20,10 +19,13 @@ from pydantic import BaseModel
 
 
 class TokenCredentialsBase(abc.ABC):
-    """Base class for pluggable credential providers with automatic token refresh.
+    """Base class for pluggable credential providers.
 
-    Implement refresh_api_key_hook to provide custom token refresh logic.
-    The hook is called before each Kubernetes API request.
+    The refresh_api_key_hook method is called before every Kubernetes API
+    request via Configuration.refresh_api_key_hook — the only auth extension
+    point on the K8s Python client. Despite its name, this hook handles both
+    initial token acquisition and refresh. Implementations should check token
+    validity and only perform an exchange when needed.
     """
 
     @abc.abstractmethod
@@ -36,6 +38,7 @@ class KubernetesBackendConfig(BaseModel):
     config_file: str | None = None
     context: str | None = None
     client_configuration: client.Configuration | None = None
+    # Auth fields
     token: str | None = None
     server: str | None = None
     verify_ssl: bool = True
