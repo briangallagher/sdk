@@ -25,11 +25,10 @@ Resolution order (first match wins)
 
 2. **Pluggable** ``credentials`` + ``server`` — wires
    ``Configuration.refresh_api_key_hook`` to a :class:`TokenCredentialsBase`
-   implementation. Use this for Vault, AWS STS, enterprise IdPs, or the
-   optional ``kubernetes_oidc`` flows (client credentials, password, device,
-   browser+PKCE). The hook is the Kubernetes Python client's only supported
-   extension point for dynamic tokens; it runs before each API call and must
-   set ``api_key`` / ``api_key_prefix`` for Bearer tokens when needed.
+   implementation. Use this for Vault, AWS STS, enterprise IdPs, or OIDC
+   flows. The hook is the Kubernetes Python client's only supported extension
+   point for dynamic tokens; it runs before each API call and must set
+   ``api_key`` / ``api_key_prefix`` for Bearer tokens when needed.
 
 3. **Explicit bearer** ``token`` + ``server`` — static access token (e.g. CI
    secret, ``kubectl create token``).
@@ -39,7 +38,7 @@ Resolution order (first match wins)
 
 5. **Environment OIDC client credentials** — ``KUBEFLOW_OIDC_ISSUER``,
    ``KUBEFLOW_OIDC_CLIENT_ID``, ``KUBEFLOW_OIDC_CLIENT_SECRET``, and
-   ``KUBEFLOW_API_HOST`` build :class:`kubernetes_oidc.OIDCClientCredentials`
+   ``KUBEFLOW_API_HOST`` build an ``OIDCClientCredentials`` instance
    (RFC 6749 section 4.4). Requires ``pip install kubeflow[oidc]``.
 
 6. **Kubeconfig file** — local dev and shared clusters via ``config_file`` /
@@ -54,8 +53,8 @@ import os
 
 from kubernetes import client, config
 
-from kubeflow.common.types import KubernetesBackendConfig
 import kubeflow.common.utils as common_utils
+from kubeflow.common.types import KubernetesBackendConfig
 
 
 def _host_from_cfg(cfg: KubernetesBackendConfig, host: str) -> client.Configuration:
@@ -69,12 +68,11 @@ def _host_from_cfg(cfg: KubernetesBackendConfig, host: str) -> client.Configurat
 
 
 def _try_oidc_env_client_credentials(cfg: KubernetesBackendConfig) -> client.ApiClient | None:
-    """Build an ApiClient from KUBEFLOW_OIDC_* env vars using kubernetes-oidc.
+    """Build an ApiClient from KUBEFLOW_OIDC_* env vars.
 
-    Covers service-style client credentials against a known issuer when callers
-    do not construct ``OIDCClientCredentials`` in code. Returns *None* when the
-    required variables are not all set (so resolution can fall through to
-    kubeconfig / in-cluster).
+    Uses the built-in OIDCClientCredentials class for service-style client
+    credentials. Returns *None* when the required variables are not all set
+    (so resolution falls through to kubeconfig / in-cluster).
     """
     issuer = os.environ.get("KUBEFLOW_OIDC_ISSUER")
     cid = os.environ.get("KUBEFLOW_OIDC_CLIENT_ID")
@@ -83,20 +81,16 @@ def _try_oidc_env_client_credentials(cfg: KubernetesBackendConfig) -> client.Api
     if not (issuer and cid and secret and api_host):
         return None
     try:
-        from kubernetes_oidc import OIDCClientCredentials
+        from kubeflow.common.auth.oidc import OIDCClientCredentials
     except ImportError as e:
         raise ImportError(
-            "KUBEFLOW_OIDC_* environment variables are set but kubernetes-oidc is not "
+            "KUBEFLOW_OIDC_* environment variables are set but the OIDC extra is not "
             'installed. Install with: pip install "kubeflow[oidc]"'
         ) from e
-    scopes_env = os.environ.get("KUBEFLOW_OIDC_SCOPES")
-    scopes = scopes_env.split() if scopes_env else None
     oidc_creds = OIDCClientCredentials(
         issuer_url=issuer,
         client_id=cid,
         client_secret=secret,
-        scopes=scopes,
-        verify=cfg.verify_ssl,
     )
     configuration = _host_from_cfg(cfg, api_host)
     configuration.refresh_api_key_hook = oidc_creds.refresh_api_key_hook
@@ -152,6 +146,6 @@ def load_kubernetes_config(cfg: KubernetesBackendConfig) -> client.ApiClient:
     else:
         config.load_incluster_config()
 
-    # ``cfg.client_configuration`` is unset; the client uses the default Configuration
-    # populated by ``load_kube_config`` / ``load_incluster_config``.
+    # ``cfg.client_configuration`` is unset here; the client reads the process-wide
+    # default ``Configuration`` that ``load_kube_config`` / ``load_incluster_config`` filled.
     return client.ApiClient(cfg.client_configuration)

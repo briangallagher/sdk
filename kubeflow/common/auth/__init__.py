@@ -12,29 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Authentication utilities.
+"""Built-in OIDC credential classes.
 
-This module re-exports OIDC credential classes from the kubernetes-oidc
-package. Install with: pip install kubeflow[oidc]
-
-kubernetes-oidc is optional so lightweight or air-gapped installs avoid
-pulling OAuth/OIDC stacks, HTTP helpers beyond kubernetes, and interactive
-browser/device flows unless users opt in.
+Phase 1 ships client credentials and password grants built into the SDK.
+Phase 2 adds device flow and browser flow via the optional kubernetes-oidc
+package, which slots into the same credentials= interface.
 """
 
-try:
-    from kubernetes_oidc import (
-        OIDCBrowserFlowCredentials,
-        OIDCClientCredentials,
-        OIDCDeviceFlowCredentials,
-        OIDCPasswordCredentials,
-    )
+from kubeflow.common.auth.oidc import OIDCClientCredentials, OIDCPasswordCredentials
 
-    __all__ = [
-        "OIDCClientCredentials",
-        "OIDCPasswordCredentials",
-        "OIDCDeviceFlowCredentials",
-        "OIDCBrowserFlowCredentials",
-    ]
-except ImportError:
-    __all__ = []
+__all__ = ["OIDCClientCredentials", "OIDCPasswordCredentials"]
