@@ -31,29 +31,48 @@ class _OIDCBaseCredentials(TokenCredentialsBase):
         self._access_token: str | None = None
         self._expires_at: float = 0
 
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}("
+            f"client_id={self._client_id!r}, "
+            f"token_endpoint={self._token_endpoint!r}, "
+            f"has_token={self._access_token is not None})"
+        )
+
     def _discover(self, issuer_url: str) -> str:
+        normalised = issuer_url.rstrip("/")
         resp = requests.get(
-            f"{issuer_url.rstrip('/')}/.well-known/openid-configuration",
+            f"{normalised}/.well-known/openid-configuration",
             timeout=10,
         )
         resp.raise_for_status()
-        return resp.json()["token_endpoint"]
+        data = resp.json()
+
+        response_issuer = data.get("issuer")
+        if response_issuer is not None:
+            if response_issuer.rstrip("/") != normalised:
+                raise ValueError(
+                    f"OIDC issuer mismatch: requested {normalised!r} but "
+                    f"discovery document returned {response_issuer!r}. "
+                    f"This may indicate a misconfigured or compromised provider."
+                )
+
+        return data["token_endpoint"]
 
     def _exchange(self, data: dict) -> None:
         resp = requests.post(self._token_endpoint, data=data, timeout=10)
         resp.raise_for_status()
         token_data = resp.json()
         self._access_token = token_data["access_token"]
-        # Refresh slightly before ``expires_in`` so concurrent requests rarely hit 401s.
-        self._expires_at = time.time() + token_data.get("expires_in", 300) - 30
+        self._expires_at = time.monotonic() + token_data.get("expires_in", 300) - 30
 
     def refresh_api_key_hook(self, config: client.Configuration) -> None:
         """Kubernetes client hook: refresh token material on ``Configuration`` before requests.
 
-        Calls ``_do_token_exchange`` only when ``time.time() >= _expires_at``; always sets
+        Calls ``_do_token_exchange`` only when the token is expired or absent; always sets
         Bearer ``api_key`` / ``api_key_prefix`` from the current access token.
         """
-        if time.time() >= self._expires_at:
+        if self._access_token is None or time.monotonic() >= self._expires_at:
             self._do_token_exchange()
         config.api_key["authorization"] = self._access_token
         config.api_key_prefix["authorization"] = "Bearer"
@@ -69,6 +88,15 @@ class OIDCClientCredentials(_OIDCBaseCredentials):
         super().__init__(issuer_url, client_id)
         self._client_secret = client_secret
         self._do_token_exchange()
+
+    def __repr__(self) -> str:
+        return (
+            f"OIDCClientCredentials("
+            f"client_id={self._client_id!r}, "
+            f"token_endpoint={self._token_endpoint!r}, "
+            f"client_secret=<REDACTED>, "
+            f"has_token={self._access_token is not None})"
+        )
 
     def _do_token_exchange(self) -> None:
         self._exchange(
@@ -92,6 +120,16 @@ class OIDCPasswordCredentials(_OIDCBaseCredentials):
         self._username = username
         self._password = password
         self._do_token_exchange()
+
+    def __repr__(self) -> str:
+        return (
+            f"OIDCPasswordCredentials("
+            f"client_id={self._client_id!r}, "
+            f"username={self._username!r}, "
+            f"token_endpoint={self._token_endpoint!r}, "
+            f"password=<REDACTED>, "
+            f"has_token={self._access_token is not None})"
+        )
 
     def _do_token_exchange(self) -> None:
         self._exchange(
