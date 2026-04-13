@@ -23,7 +23,7 @@ from typing import Any
 import uuid
 
 from kubeflow_katib_api import models
-from kubernetes import client, config
+from kubernetes import client
 
 import kubeflow.common.constants as common_constants
 from kubeflow.common.types import KubernetesBackendConfig
@@ -52,15 +52,9 @@ class KubernetesBackend(RuntimeBackend):
         if cfg.namespace is None:
             cfg.namespace = common_utils.get_default_target_namespace(cfg.context)
 
-        # If client configuration is not set, use kube-config to access Kubernetes APIs.
-        if cfg.client_configuration is None:
-            # Load kube-config or in-cluster config.
-            if cfg.config_file or not common_utils.is_running_in_k8s():
-                config.load_kube_config(config_file=cfg.config_file, context=cfg.context)
-            else:
-                config.load_incluster_config()
+        from kubeflow.common.auth_utils import load_kubernetes_config
 
-        k8s_client = client.ApiClient(cfg.client_configuration)
+        k8s_client = load_kubernetes_config(cfg)
         self.custom_api = client.CustomObjectsApi(k8s_client)
         self.core_api = client.CoreV1Api(k8s_client)
 
