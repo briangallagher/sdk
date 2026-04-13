@@ -19,16 +19,14 @@ from __future__ import annotations
 import builtins
 import contextlib
 import os
-import sys
-import types
 from unittest.mock import patch
 from urllib.parse import parse_qs
 
 from kubernetes import client
 import pytest
+import requests
 import responses
 
-import kubeflow.common.auth.oidc as kf_oidc
 from kubeflow.common.auth.oidc import OIDCClientCredentials, OIDCPasswordCredentials
 from kubeflow.common.auth_utils import load_kubernetes_config
 from kubeflow.common.types import KubernetesBackendConfig, TokenCredentialsBase
@@ -49,27 +47,6 @@ def _http_request_body(body: bytes | str | None) -> str:
     if body is None:
         return ""
     return body.decode() if isinstance(body, bytes) else body
-
-
-class _KubernetesOidcShim:
-    def __init__(
-        self,
-        issuer_url: str,
-        client_id: str,
-        client_secret: str,
-        scopes: list[str] | None = None,
-        verify: bool = True,
-    ) -> None:
-        del scopes, verify
-        inner = kf_oidc.OIDCClientCredentials(issuer_url, client_id, client_secret)
-        self.refresh_api_key_hook = inner.refresh_api_key_hook
-
-
-def _kubernetes_oidc_shim_module():
-    import types as std_types
-    m = std_types.ModuleType("kubernetes_oidc")
-    m.OIDCClientCredentials = _KubernetesOidcShim
-    return m
 
 
 @pytest.fixture(autouse=True)
@@ -206,30 +183,24 @@ def test_load_kubernetes_config_oidc_env_client_credentials(
     monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_ID", "cid")
     monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_SECRET", "csecret")
 
-    calls: list[tuple[str, dict]] = []
+    calls: list[tuple[str, tuple, dict]] = []
 
     class FakeOIDCClientCredentials:
-        def __init__(self, **kwargs) -> None:
-            calls.append(("init", kwargs))
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("init", args, kwargs))
 
         def refresh_api_key_hook(self, configuration: client.Configuration) -> None:
             configuration.api_key["authorization"] = "oidc-at"
             configuration.api_key_prefix["authorization"] = "Bearer"
 
-    fake_mod = types.ModuleType("kubernetes_oidc")
-    fake_mod.OIDCClientCredentials = FakeOIDCClientCredentials
-    monkeypatch.setitem(sys.modules, "kubernetes_oidc", fake_mod)
-
-    api = load_kubernetes_config(KubernetesBackendConfig())
-    monkeypatch.delitem(sys.modules, "kubernetes_oidc", raising=False)
+    with patch(
+        "kubeflow.common.auth.oidc.OIDCClientCredentials", FakeOIDCClientCredentials
+    ):
+        api = load_kubernetes_config(KubernetesBackendConfig())
 
     conf = api.configuration
     assert conf.host == "https://api.from.env"
     assert calls and calls[0][0] == "init"
-    init_kw = calls[0][1]
-    assert init_kw["issuer_url"] == "https://issuer.example/idp"
-    assert init_kw["client_id"] == "cid"
-    assert init_kw["client_secret"] == "csecret"
     assert callable(conf.refresh_api_key_hook)
     conf.refresh_api_key_hook(conf)
     assert conf.api_key["authorization"] == "oidc-at"
@@ -244,8 +215,8 @@ def test_load_kubernetes_config_oidc_env_import_error(clear_kubeflow_env, monkey
     real_import = builtins.__import__
 
     def blocking_import(name, globals=None, locals=None, fromlist=(), level=0):  # type: ignore[no-untyped-def]
-        if name == "kubernetes_oidc":
-            raise ImportError("simulated missing kubernetes_oidc")
+        if name == "kubeflow.common.auth.oidc" and "OIDCClientCredentials" in (fromlist or ()):
+            raise ImportError("simulated missing oidc module")
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", blocking_import)
@@ -329,39 +300,31 @@ def test_oidc_device_and_browser_placeholders_accepted_via_credentials(
         assert conf.api_key["authorization"] == expected
 
 
-def test_kubernetes_oidc_integration_mocked_http_client_credentials(
+def test_oidc_env_integration_wires_hook_to_configuration(
     clear_kubeflow_env, monkeypatch
 ) -> None:
-    """Env OIDC path wires a kubernetes_oidc-style credential object to the K8s hook."""
+    """Env OIDC path wires an OIDCClientCredentials hook to the K8s Configuration."""
 
     hook_calls = {"n": 0}
-
-    class HookCreds:
-        def refresh_api_key_hook(self, configuration: client.Configuration) -> None:
-            hook_calls["n"] += 1
-            configuration.api_key["authorization"] = "from-hook"
-            configuration.api_key_prefix["authorization"] = "Bearer"
-
-    hook = HookCreds()
 
     class FakeOIDCClientCredentials:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        refresh_api_key_hook = hook.refresh_api_key_hook
-
-    fake_mod = types.ModuleType("kubernetes_oidc")
-    fake_mod.OIDCClientCredentials = FakeOIDCClientCredentials
-    monkeypatch.setitem(sys.modules, "kubernetes_oidc", fake_mod)
+        def refresh_api_key_hook(self, configuration: client.Configuration) -> None:
+            hook_calls["n"] += 1
+            configuration.api_key["authorization"] = "from-hook"
+            configuration.api_key_prefix["authorization"] = "Bearer"
 
     monkeypatch.setenv("KUBEFLOW_API_HOST", "https://api/")
     monkeypatch.setenv("KUBEFLOW_OIDC_ISSUER", "https://issuer/")
     monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_ID", "c")
     monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_SECRET", "s")
 
-    api = load_kubernetes_config(KubernetesBackendConfig())
-
-    monkeypatch.delitem(sys.modules, "kubernetes_oidc", raising=False)
+    with patch(
+        "kubeflow.common.auth.oidc.OIDCClientCredentials", FakeOIDCClientCredentials
+    ):
+        api = load_kubernetes_config(KubernetesBackendConfig())
 
     conf = api.configuration
     conf.refresh_api_key_hook(conf)
@@ -369,31 +332,36 @@ def test_kubernetes_oidc_integration_mocked_http_client_credentials(
     assert conf.api_key["authorization"] == "from-hook"
 
 
-def test_kubeflow_oidc_scopes_passed_to_oidc_constructor(clear_kubeflow_env, monkeypatch) -> None:
+def test_oidc_env_passes_correct_args_to_constructor(clear_kubeflow_env, monkeypatch) -> None:
+    """Env OIDC passes issuer, client_id, client_secret to OIDCClientCredentials."""
     monkeypatch.setenv("KUBEFLOW_API_HOST", "https://api/")
-    monkeypatch.setenv("KUBEFLOW_OIDC_ISSUER", "https://issuer/")
-    monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_ID", "c")
-    monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_SECRET", "s")
-    monkeypatch.setenv("KUBEFLOW_OIDC_SCOPES", "openid profile email")
+    monkeypatch.setenv("KUBEFLOW_OIDC_ISSUER", "https://idp.example/realms/test")
+    monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_ID", "my-client")
+    monkeypatch.setenv("KUBEFLOW_OIDC_CLIENT_SECRET", "my-secret")
 
-    inits: list[dict] = []
+    captured: list[dict] = []
 
     class FakeOIDCClientCredentials:
-        def __init__(self, **kwargs) -> None:
-            inits.append(kwargs)
+        def __init__(self, issuer_url, client_id, client_secret) -> None:
+            captured.append({
+                "issuer_url": issuer_url,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            })
 
         def refresh_api_key_hook(self, configuration: client.Configuration) -> None:
             configuration.api_key["authorization"] = "t"
             configuration.api_key_prefix["authorization"] = "Bearer"
 
-    fake_mod = types.ModuleType("kubernetes_oidc")
-    fake_mod.OIDCClientCredentials = FakeOIDCClientCredentials
-    monkeypatch.setitem(sys.modules, "kubernetes_oidc", fake_mod)
+    with patch(
+        "kubeflow.common.auth.oidc.OIDCClientCredentials", FakeOIDCClientCredentials
+    ):
+        load_kubernetes_config(KubernetesBackendConfig())
 
-    load_kubernetes_config(KubernetesBackendConfig())
-    monkeypatch.delitem(sys.modules, "kubernetes_oidc", raising=False)
-
-    assert inits[0].get("scopes") == ["openid", "profile", "email"]
+    assert len(captured) == 1
+    assert captured[0]["issuer_url"] == "https://idp.example/realms/test"
+    assert captured[0]["client_id"] == "my-client"
+    assert captured[0]["client_secret"] == "my-secret"
 
 @responses.activate
 def test_oidc_client_credentials_discovery_and_exchange_on_init() -> None:
@@ -531,4 +499,376 @@ def test_oidc_password_refresh_hook_reloads_when_expired() -> None:
     creds.refresh_api_key_hook(conf)
     assert len([c for c in responses.calls if c.request.method == "POST"]) == 2
     assert conf.api_key["authorization"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# Error scenario tests (Strat AC4 — actionable authentication errors)
+# ---------------------------------------------------------------------------
+
+
+@responses.activate
+def test_oidc_bad_credentials_raises_http_error() -> None:
+    """Wrong client secret surfaces a clear HTTP 401 from the token endpoint."""
+    responses.get(
+        "https://issuer-err/.well-known/openid-configuration",
+        json={"issuer": "https://issuer-err", "token_endpoint": "https://issuer-err/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-err/token",
+        json={"error": "invalid_client", "error_description": "Bad client credentials"},
+        status=401,
+    )
+    with pytest.raises(requests.HTTPError, match="401"):
+        OIDCClientCredentials(
+            issuer_url="https://issuer-err",
+            client_id="cid",
+            client_secret="wrong-secret",
+        )
+
+
+@responses.activate
+def test_oidc_unreachable_issuer_raises_connection_error() -> None:
+    """Unreachable IDP raises ConnectionError during discovery, not a generic 401."""
+    responses.get(
+        "https://unreachable/.well-known/openid-configuration",
+        body=requests.ConnectionError("DNS resolution failed"),
+    )
+    with pytest.raises(requests.ConnectionError, match="DNS"):
+        OIDCClientCredentials(
+            issuer_url="https://unreachable",
+            client_id="cid",
+            client_secret="sec",
+        )
+
+
+@responses.activate
+def test_oidc_discovery_returns_non_200_raises_http_error() -> None:
+    """IDP returning 500 during discovery surfaces as HTTPError."""
+    responses.get(
+        "https://broken-idp/.well-known/openid-configuration",
+        json={"error": "internal"},
+        status=500,
+    )
+    with pytest.raises(requests.HTTPError, match="500"):
+        OIDCClientCredentials(
+            issuer_url="https://broken-idp",
+            client_id="cid",
+            client_secret="sec",
+        )
+
+
+@responses.activate
+def test_oidc_issuer_mismatch_raises_value_error() -> None:
+    """Discovery doc with mismatched issuer raises ValueError (SEC-4 mitigation)."""
+    responses.get(
+        "https://legit-issuer/.well-known/openid-configuration",
+        json={
+            "issuer": "https://evil.example",
+            "token_endpoint": "https://evil.example/token",
+        },
+        status=200,
+    )
+    with pytest.raises(ValueError, match="issuer mismatch"):
+        OIDCClientCredentials(
+            issuer_url="https://legit-issuer",
+            client_id="cid",
+            client_secret="sec",
+        )
+
+
+@responses.activate
+def test_oidc_token_endpoint_error_during_refresh_raises() -> None:
+    """Token endpoint failure during refresh (not init) surfaces clearly."""
+    responses.get(
+        "https://issuer-ref-err/.well-known/openid-configuration",
+        json={"issuer": "https://issuer-ref-err", "token_endpoint": "https://issuer-ref-err/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-ref-err/token",
+        json={"access_token": "t1", "expires_in": 300},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-ref-err/token",
+        json={"error": "server_error"},
+        status=500,
+    )
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-ref-err",
+        client_id="cid",
+        client_secret="sec",
+    )
+    creds._expires_at = 0.0
+    conf = client.Configuration()
+    with pytest.raises(requests.HTTPError, match="500"):
+        creds.refresh_api_key_hook(conf)
+
+
+# ---------------------------------------------------------------------------
+# Security tests (SEC-1 repr redaction, SEC-5 monotonic clock)
+# ---------------------------------------------------------------------------
+
+
+@responses.activate
+def test_repr_redacts_client_secret() -> None:
+    """OIDCClientCredentials repr must never expose client_secret (SEC-1)."""
+    responses.get(
+        "https://issuer-repr/.well-known/openid-configuration",
+        json={"issuer": "https://issuer-repr", "token_endpoint": "https://issuer-repr/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-repr/token",
+        json={"access_token": "secret-token-value", "expires_in": 300},
+        status=200,
+    )
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-repr",
+        client_id="my-client",
+        client_secret="super-secret-value",
+    )
+    r = repr(creds)
+    assert "super-secret-value" not in r
+    assert "secret-token-value" not in r
+    assert "my-client" in r
+
+
+@responses.activate
+def test_repr_redacts_password() -> None:
+    """OIDCPasswordCredentials repr must never expose password (SEC-1)."""
+    responses.get(
+        "https://issuer-pwrepr/.well-known/openid-configuration",
+        json={"issuer": "https://issuer-pwrepr", "token_endpoint": "https://issuer-pwrepr/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-pwrepr/token",
+        json={"access_token": "at", "expires_in": 300},
+        status=200,
+    )
+    creds = OIDCPasswordCredentials(
+        issuer_url="https://issuer-pwrepr",
+        client_id="cid",
+        username="alice",
+        password="hunter2",
+    )
+    r = repr(creds)
+    assert "hunter2" not in r
+    assert "alice" in r
+
+
+@responses.activate
+def test_monotonic_clock_used_for_expiry() -> None:
+    """Token expiry is tracked with time.monotonic, not time.time (SEC-5)."""
+    import time as time_mod
+
+    responses.get(
+        "https://issuer-mono/.well-known/openid-configuration",
+        json={"issuer": "https://issuer-mono", "token_endpoint": "https://issuer-mono/token"},
+        status=200,
+    )
+    responses.post(
+        "https://issuer-mono/token",
+        json={"access_token": "t", "expires_in": 300},
+        status=200,
+    )
+    before = time_mod.monotonic()
+    creds = OIDCClientCredentials(
+        issuer_url="https://issuer-mono",
+        client_id="cid",
+        client_secret="sec",
+    )
+    after = time_mod.monotonic()
+    assert before + 270 - 1 <= creds._expires_at <= after + 270 + 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-backend and shared credentials tests
+# ---------------------------------------------------------------------------
+
+
+def test_single_credentials_shared_across_multiple_backends(clear_kubeflow_env) -> None:
+    """One credential object works when passed to multiple backend configs."""
+    creds = _DummyTokenCreds()
+    config_kwargs = {"credentials": creds, "server": "https://api.shared/"}
+
+    api1 = load_kubernetes_config(KubernetesBackendConfig(**config_kwargs))
+    api2 = load_kubernetes_config(KubernetesBackendConfig(**config_kwargs))
+
+    api1.configuration.refresh_api_key_hook(api1.configuration)
+    api2.configuration.refresh_api_key_hook(api2.configuration)
+
+    assert creds.hook_calls == 2
+    assert api1.configuration.api_key["authorization"] == "dummy-access-token"
+    assert api2.configuration.api_key["authorization"] == "dummy-access-token"
+
+
+# ---------------------------------------------------------------------------
+# Custom credential provider tests (Vault-style, rotating tokens)
+# ---------------------------------------------------------------------------
+
+
+def test_vault_style_rotating_credentials(clear_kubeflow_env) -> None:
+    """Enterprise Vault-style credentials that rotate on each call."""
+
+    class VaultCredentials(TokenCredentialsBase):
+        def __init__(self) -> None:
+            self._call_count = 0
+
+        def refresh_api_key_hook(self, config: client.Configuration) -> None:
+            self._call_count += 1
+            config.api_key["authorization"] = f"vault-token-{self._call_count}"
+            config.api_key_prefix["authorization"] = "Bearer"
+
+    creds = VaultCredentials()
+    api = load_kubernetes_config(
+        KubernetesBackendConfig(server="https://api.vault/", credentials=creds)
+    )
+    conf = api.configuration
+    conf.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "vault-token-1"
+    conf.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "vault-token-2"
+
+
+def test_aws_sts_style_credentials(clear_kubeflow_env) -> None:
+    """AWS STS-style credentials that assume a role and return a session token."""
+
+    class STSCredentials(TokenCredentialsBase):
+        def __init__(self, role_arn: str) -> None:
+            self._role_arn = role_arn
+
+        def refresh_api_key_hook(self, config: client.Configuration) -> None:
+            config.api_key["authorization"] = f"sts-token-for-{self._role_arn}"
+            config.api_key_prefix["authorization"] = "Bearer"
+
+    creds = STSCredentials(role_arn="arn:aws:iam::123:role/ml-training")
+    api = load_kubernetes_config(
+        KubernetesBackendConfig(server="https://eks.us-east-1/", credentials=creds)
+    )
+    conf = api.configuration
+    conf.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "sts-token-for-arn:aws:iam::123:role/ml-training"
+
+
+# ---------------------------------------------------------------------------
+# Resolution priority — full conflict test
+# ---------------------------------------------------------------------------
+
+
+def test_full_priority_credentials_wins_over_token_and_env(
+    clear_kubeflow_env, monkeypatch
+) -> None:
+    """When credentials=, token=, AND env vars are all set, credentials wins."""
+    monkeypatch.setenv("KUBEFLOW_TOKEN", "env-token")
+    monkeypatch.setenv("KUBEFLOW_API_HOST", "https://env-host/")
+
+    creds = _DummyTokenCreds()
+    cfg = KubernetesBackendConfig(
+        token="explicit-token",
+        server="https://explicit-server/",
+        credentials=creds,
+    )
+    api = load_kubernetes_config(cfg)
+    conf = api.configuration
+    conf.refresh_api_key_hook(conf)
+    assert conf.api_key["authorization"] == "dummy-access-token"
+    assert conf.host == "https://explicit-server"
+
+
+def test_prebuilt_wins_over_everything(clear_kubeflow_env, monkeypatch) -> None:
+    """Pre-built client_configuration wins over credentials, token, and env."""
+    monkeypatch.setenv("KUBEFLOW_TOKEN", "env-token")
+    monkeypatch.setenv("KUBEFLOW_API_HOST", "https://env/")
+
+    prebuilt = client.Configuration()
+    prebuilt.host = "https://prebuilt-wins/"
+    prebuilt.api_key["authorization"] = "prebuilt-token"
+
+    cfg = KubernetesBackendConfig(
+        client_configuration=prebuilt,
+        token="explicit-token",
+        server="https://explicit/",
+        credentials=_DummyTokenCreds(),
+    )
+    api = load_kubernetes_config(cfg)
+    assert api.configuration.host == "https://prebuilt-wins/"
+    assert api.configuration.api_key["authorization"] == "prebuilt-token"
+
+
+# ---------------------------------------------------------------------------
+# Backend wiring tests — Trainer, Spark, Optimizer use load_kubernetes_config
+# ---------------------------------------------------------------------------
+
+
+def test_trainer_backend_uses_load_kubernetes_config(clear_kubeflow_env) -> None:
+    """TrainerClient's KubernetesBackend calls load_kubernetes_config with the config."""
+    creds = _DummyTokenCreds()
+    mock_client = client.ApiClient()
+
+    with patch("kubeflow.common.auth_utils.load_kubernetes_config", return_value=mock_client) as m:
+        from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
+
+        cfg = KubernetesBackendConfig(
+            server="https://trainer-api/",
+            credentials=creds,
+            namespace="test-ns",
+        )
+        KubernetesBackend(cfg)
+
+        m.assert_called_once()
+        call_cfg = m.call_args[0][0]
+        assert call_cfg.server == "https://trainer-api/"
+        assert call_cfg.credentials is creds
+
+
+def test_spark_backend_uses_load_kubernetes_config(clear_kubeflow_env) -> None:
+    """SparkClient's KubernetesBackend calls load_kubernetes_config with the config."""
+    creds = _DummyTokenCreds()
+    mock_client = client.ApiClient()
+
+    with patch("kubeflow.common.auth_utils.load_kubernetes_config", return_value=mock_client) as m:
+        from kubeflow.spark.backends.kubernetes.backend import KubernetesBackend as SparkBackend
+
+        cfg = KubernetesBackendConfig(
+            server="https://spark-api/",
+            credentials=creds,
+            namespace="spark-ns",
+        )
+        SparkBackend(cfg)
+
+        m.assert_called_once()
+        call_cfg = m.call_args[0][0]
+        assert call_cfg.server == "https://spark-api/"
+        assert call_cfg.credentials is creds
+
+
+def test_optimizer_backend_uses_load_kubernetes_config(clear_kubeflow_env) -> None:
+    """OptimizerClient's KubernetesBackend calls load_kubernetes_config with the config.
+
+    Optimizer creates an internal TrainerBackend too, so load_kubernetes_config is
+    called twice (once for optimizer, once for the embedded trainer).
+    """
+    creds = _DummyTokenCreds()
+    mock_client = client.ApiClient()
+
+    with patch("kubeflow.common.auth_utils.load_kubernetes_config", return_value=mock_client) as m:
+        from kubeflow.optimizer.backends.kubernetes.backend import (
+            KubernetesBackend as OptimizerBackend,
+        )
+
+        cfg = KubernetesBackendConfig(
+            server="https://optimizer-api/",
+            credentials=creds,
+            namespace="opt-ns",
+        )
+        OptimizerBackend(cfg)
+
+        assert m.call_count == 2
+        for call in m.call_args_list:
+            call_cfg = call[0][0]
+            assert call_cfg.server == "https://optimizer-api/"
+            assert call_cfg.credentials is creds
 
