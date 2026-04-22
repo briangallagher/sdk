@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
 from kubernetes import client
 from pydantic import BaseModel
+
+from kubeflow.common.auth.types import TokenCredentialsBase
+
+__all__ = ["TokenCredentialsBase", "KubernetesBackendConfig"]
 
 
 class KubernetesBackendConfig(BaseModel):
@@ -22,6 +27,11 @@ class KubernetesBackendConfig(BaseModel):
     config_file: str | None = None
     context: str | None = None
     client_configuration: client.Configuration | None = None
+    server: str | None = None
+    token: str | None = None
+    credentials: TokenCredentialsBase | None = None
+    verify_ssl: bool = True
+    ca_cert: str | None = None
 
     class Config:
         arbitrary_types_allowed = True

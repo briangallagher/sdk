@@ -44,6 +44,7 @@ spark = [
   "kubeflow-spark-api>=2.4.0",
 ]
 hub = ["model-registry>=0.3.6"]
+oidc-keyring = ["keyring>=24.0.0"]
 
 [dependency-groups]
 docs = [
@@ -58,6 +59,7 @@ dev = [
   "kubeflow[hub,spark]",
   "pytest>=7.0",
   "pytest-mock>=3.10",
+  "responses>=0.25.0",
   "coverage>=7.0",
   "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
   "kubeflow_katib_api@git+https://github.com/kubeflow/katib.git@master#subdirectory=api/python_api",
