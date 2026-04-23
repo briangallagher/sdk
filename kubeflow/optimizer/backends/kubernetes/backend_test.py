@@ -33,7 +33,10 @@ from kubeflow.trainer.types.types import CustomTrainer, TrainJobTemplate
 def optimizer_backend():
     """Provide an optimizer KubernetesBackend with mocked Kubernetes APIs."""
     with (
-        patch("kubernetes.config.load_kube_config", return_value=None),
+        patch(
+            "kubeflow.common.auth.kube_authkit_bridge.kube_authkit_get_client",
+            return_value=Mock(),
+        ),
         patch(
             "kubernetes.client.CustomObjectsApi",
             return_value=Mock(

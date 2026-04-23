@@ -52,7 +52,10 @@ def test_backend_selection(test_case):
     """Test TrainerClient backend selection logic."""
     if test_case["use_k8s_mocks"]:
         with (
-            patch("kubernetes.config.load_kube_config"),
+            patch(
+                "kubeflow.common.auth.kube_authkit_bridge.kube_authkit_get_client",
+                return_value=Mock(),
+            ),
             patch("kubernetes.client.CustomObjectsApi") as mock_custom_api,
             patch("kubernetes.client.CoreV1Api") as mock_core_api,
         ):
