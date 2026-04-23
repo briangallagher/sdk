@@ -12,255 +12,334 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for :mod:`kubeflow.common.auth.kube_authkit_bridge`.
-
-``AuthConfig`` and ``get_k8s_client`` are patched on the bridge module so tests
-do not depend on kube-authkit behavior or installation.
-"""
+"""Tests for kubeflow.common.auth — bridge, resolution, adapter, identity."""
 
 from __future__ import annotations
 
-import logging
+import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 from kubernetes import client
 
+from kubeflow.common.auth.identity import identity_annotations
+from kubeflow.common.auth.kube_authkit_bridge import (
+    _KubeAuthkitAdapter,
+    _StaticTokenCredentials,
+    _build_client_with_credentials,
+    get_kubernetes_client,
+    load_kubernetes_config,
+    resolve_credentials,
+)
+from kubeflow.common.auth.types import TokenCredentialsBase
 from kubeflow.common.types import KubernetesBackendConfig
 
 
-@pytest.fixture
-def bridge_module():
-    import kubeflow.common.auth.kube_authkit_bridge as mod
+# ---------------------------------------------------------------------------
+# TokenCredentialsBase protocol compliance
+# ---------------------------------------------------------------------------
 
-    return mod
+class TestTokenCredentialsBaseProtocol:
+    def test_static_token_satisfies_protocol(self):
+        creds = _StaticTokenCredentials("tok")
+        assert isinstance(creds, TokenCredentialsBase)
 
+    def test_adapter_satisfies_protocol(self):
+        strategy = MagicMock()
+        strategy.get_token.return_value = "tok"
+        adapter = _KubeAuthkitAdapter(strategy)
+        assert isinstance(adapter, TokenCredentialsBase)
 
-@pytest.fixture
-def authkit_available(bridge_module):
-    """Force the bridge to behave as if kube-authkit were importable."""
-    with patch.object(bridge_module, "KUBE_AUTHKIT_AVAILABLE", True):
-        yield bridge_module
-
-
-def test_prebuilt_client_configuration_returns_api_client_directly(
-    authkit_available, bridge_module
-):
-    """When ``client_configuration`` is set, return ``ApiClient`` without calling kube-authkit."""
-    configuration = client.Configuration()
-    configuration.host = "https://example.test:6443"
-    cfg = KubernetesBackendConfig(client_configuration=configuration)
-
-    with patch.object(bridge_module, "kube_authkit_get_client") as mock_get_client:
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            result = bridge_module.get_kubernetes_client(cfg)
-
-    assert isinstance(result, client.ApiClient)
-    mock_get_client.assert_not_called()
-    mock_auth_config.assert_not_called()
+    def test_custom_object_satisfies_protocol(self):
+        class MyCreds:
+            def refresh_api_key_hook(self, config):
+                pass
+            def get_token(self):
+                return "x"
+        assert isinstance(MyCreds(), TokenCredentialsBase)
 
 
-def test_oidc_auth_method_maps_to_auth_config(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(
-        auth_method="oidc",
-        oidc_issuer="https://issuer.example",
-        client_id="my-client",
-        client_secret="secret",
-        scopes=["openid", "profile"],
-        use_device_flow=True,
-        oidc_callback_port=9000,
-        use_keyring=True,
-        verify_ssl=False,
-        k8s_api_host="https://api.example:6443",
-        ca_cert="/tmp/ca.pem",
-    )
-    fake_client = MagicMock()
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=fake_client) as mock_get:
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            out = bridge_module.get_kubernetes_client(cfg)
+# ---------------------------------------------------------------------------
+# _StaticTokenCredentials
+# ---------------------------------------------------------------------------
 
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=False,
-        k8s_api_host="https://api.example:6443",
-        ca_cert="/tmp/ca.pem",
-        method="oidc",
-        oidc_issuer="https://issuer.example",
-        client_id="my-client",
-        client_secret="secret",
-        use_device_flow=True,
-        oidc_callback_port=9000,
-        scopes=["openid", "profile"],
-        use_keyring=True,
-    )
-    mock_get.assert_called_once_with(mock_auth_config.return_value)
-    assert out is fake_client
+class TestStaticTokenCredentials:
+    def test_get_token(self):
+        creds = _StaticTokenCredentials("my-token")
+        assert creds.get_token() == "my-token"
+
+    def test_refresh_api_key_hook_updates_config(self):
+        creds = _StaticTokenCredentials("my-token")
+        cfg = client.Configuration()
+        creds.refresh_api_key_hook(cfg)
+        assert cfg.api_key["authorization"] == "my-token"
+        assert cfg.api_key_prefix["authorization"] == "Bearer"
 
 
-def test_openshift_auth_method_passes_token(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(
-        auth_method="openshift",
-        token="sha256~deadbeef",
-        use_keyring=False,
-    )
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()) as mock_get:
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+# ---------------------------------------------------------------------------
+# _KubeAuthkitAdapter
+# ---------------------------------------------------------------------------
 
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=True,
-        method="openshift",
-        token="sha256~deadbeef",
-        use_keyring=False,
-    )
-    mock_get.assert_called_once()
+class TestKubeAuthkitAdapter:
+    def test_get_token_delegates(self):
+        strategy = MagicMock()
+        strategy.get_token.return_value = "delegated-tok"
+        adapter = _KubeAuthkitAdapter(strategy)
+        assert adapter.get_token() == "delegated-tok"
+        strategy.get_token.assert_called_once()
 
-
-def test_legacy_config_file_maps_to_kubeconfig_and_warns(
-    authkit_available, bridge_module, caplog
-):
-    caplog.set_level(logging.WARNING)
-    cfg = KubernetesBackendConfig(config_file="/legacy/kubeconfig")
-
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
-
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=True,
-        method="kubeconfig",
-        kubeconfig_path="/legacy/kubeconfig",
-    )
-    assert any("deprecated" in r.message.lower() for r in caplog.records)
+    def test_refresh_api_key_hook_delegates(self):
+        strategy = MagicMock()
+        strategy.get_token.return_value = "refreshed-tok"
+        adapter = _KubeAuthkitAdapter(strategy)
+        cfg = client.Configuration()
+        adapter.refresh_api_key_hook(cfg)
+        assert cfg.api_key["authorization"] == "refreshed-tok"
+        assert cfg.api_key_prefix["authorization"] == "Bearer"
 
 
-def test_legacy_context_only_warns_and_sets_kubeconfig_method(
-    authkit_available, bridge_module, caplog
-):
-    caplog.set_level(logging.WARNING)
-    cfg = KubernetesBackendConfig(context="my-context")
+# ---------------------------------------------------------------------------
+# _build_client_with_credentials
+# ---------------------------------------------------------------------------
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+class TestBuildClientWithCredentials:
+    def test_wires_hook_and_server(self):
+        creds = _StaticTokenCredentials("tok")
+        api_client = _build_client_with_credentials(
+            creds, "https://api.test:6443"
+        )
+        assert isinstance(api_client, client.ApiClient)
+        assert api_client.configuration.host == "https://api.test:6443"
+        assert api_client.configuration.refresh_api_key_hook is not None
+        # Verify the hook actually works by calling it
+        api_client.configuration.refresh_api_key_hook(api_client.configuration)
+        assert api_client.configuration.api_key["authorization"] == "tok"
 
-    mock_auth_config.assert_called_once_with(verify_ssl=True, method="kubeconfig")
-    assert any("deprecated" in r.message.lower() for r in caplog.records)
-
-
-def test_auto_detection_when_no_explicit_auth_params(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig()
-
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
-
-    mock_auth_config.assert_called_once_with(verify_ssl=True, method="auto")
-
-
-def test_raises_import_error_when_kube_authkit_unavailable(bridge_module):
-    cfg = KubernetesBackendConfig()
-
-    with patch.object(bridge_module, "KUBE_AUTHKIT_AVAILABLE", False):
-        with pytest.raises(ImportError, match="kube-authkit"):
-            bridge_module.get_kubernetes_client(cfg)
+    def test_ca_cert_and_verify_ssl(self):
+        creds = _StaticTokenCredentials("tok")
+        api_client = _build_client_with_credentials(
+            creds, "https://api.test:6443",
+            verify_ssl=False, ca_cert="/tmp/ca.pem",
+        )
+        assert api_client.configuration.verify_ssl is False
+        assert api_client.configuration.ssl_ca_cert == "/tmp/ca.pem"
 
 
-def test_kubeconfig_path_and_verify_ssl_propagate(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(
-        auth_method="kubeconfig",
-        kubeconfig_path="/home/user/.kube/config",
-        verify_ssl=False,
-        k8s_api_host="https://cluster.local",
-        ca_cert="/etc/pki/ca.pem",
-    )
+# ---------------------------------------------------------------------------
+# resolve_credentials
+# ---------------------------------------------------------------------------
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+class TestResolveCredentials:
+    def test_explicit_credentials_returned_as_is(self):
+        creds = _StaticTokenCredentials("explicit")
+        result = resolve_credentials(credentials=creds)
+        assert result is creds
 
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=False,
-        k8s_api_host="https://cluster.local",
-        kubeconfig_path="/home/user/.kube/config",
-        ca_cert="/etc/pki/ca.pem",
-        method="kubeconfig",
-        use_keyring=False,
-    )
+    def test_explicit_token_wrapped(self):
+        result = resolve_credentials(token="my-token")
+        assert isinstance(result, _StaticTokenCredentials)
+        assert result.get_token() == "my-token"
 
+    def test_credentials_takes_priority_over_token(self):
+        creds = _StaticTokenCredentials("creds")
+        result = resolve_credentials(credentials=creds, token="token")
+        assert result is creds
 
-def test_oidc_optional_scopes_omitted_when_none(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(
-        auth_method="oidc",
-        oidc_issuer="https://issuer",
-        client_id="id",
-        scopes=None,
-    )
+    @patch.dict("os.environ", {"KUBEFLOW_TOKEN": "env-tok"}, clear=False)
+    def test_kubeflow_token_env_fallback(self):
+        result = resolve_credentials()
+        assert result is not None
+        assert result.get_token() == "env-tok"
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+    @patch.dict("os.environ", {"AUTHKIT_TOKEN": "authkit-tok"}, clear=False)
+    def test_authkit_token_env_fallback(self):
+        result = resolve_credentials()
+        assert result is not None
+        assert result.get_token() == "authkit-tok"
 
-    _, kwargs = mock_auth_config.call_args
-    assert "scopes" not in kwargs
-
-
-def test_explicit_kubeconfig_does_not_emit_deprecation_warning(
-    authkit_available, bridge_module, caplog
-):
-    caplog.set_level(logging.WARNING)
-    cfg = KubernetesBackendConfig(
-        auth_method="kubeconfig",
-        kubeconfig_path="/path/config",
-    )
-
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig"):
-            bridge_module.get_kubernetes_client(cfg)
-
-    assert not any("deprecated" in r.message.lower() for r in caplog.records)
+    @patch.dict("os.environ", {}, clear=True)
+    def test_returns_none_when_nothing_available(self):
+        result = resolve_credentials()
+        assert result is None
 
 
-def test_kubeconfig_path_passed_with_auto_method(authkit_available, bridge_module):
-    """``kubeconfig_path`` without ``auth_method`` still reaches kube-authkit on the auto path."""
-    cfg = KubernetesBackendConfig(kubeconfig_path="/x/kubeconfig")
+# ---------------------------------------------------------------------------
+# load_kubernetes_config
+# ---------------------------------------------------------------------------
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+class TestLoadKubernetesConfig:
+    def test_client_configuration_passthrough(self):
+        cfg = client.Configuration()
+        cfg.host = "https://example.test:6443"
+        result = load_kubernetes_config(client_configuration=cfg)
+        assert isinstance(result, client.ApiClient)
+        assert result.configuration.host == "https://example.test:6443"
 
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=True,
-        kubeconfig_path="/x/kubeconfig",
-        method="auto",
-    )
+    def test_token_with_server(self):
+        result = load_kubernetes_config(
+            token="my-token", server="https://api.test:6443"
+        )
+        assert isinstance(result, client.ApiClient)
+        assert result.configuration.host == "https://api.test:6443"
+        assert result.configuration.refresh_api_key_hook is not None
+
+    def test_token_without_server_raises(self):
+        with pytest.raises(ValueError, match="server"):
+            load_kubernetes_config(token="tok")
+
+    def test_credentials_with_server(self):
+        creds = _StaticTokenCredentials("creds-tok")
+        result = load_kubernetes_config(
+            credentials=creds, server="https://api.test:6443"
+        )
+        assert isinstance(result, client.ApiClient)
+        assert result.configuration.refresh_api_key_hook is not None
+        result.configuration.refresh_api_key_hook(result.configuration)
+        assert result.configuration.api_key["authorization"] == "creds-tok"
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    def test_kubeconfig_fallback(self, mock_load):
+        mock_load.return_value = None
+        result = load_kubernetes_config(config_file="/path/config")
+        assert isinstance(result, client.ApiClient)
+        mock_load.assert_called_once_with(config_file="/path/config", context=None)
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_incluster_config")
+    def test_incluster_fallback(self, mock_incluster, mock_kube):
+        from kubernetes.config import ConfigException
+        mock_kube.side_effect = ConfigException("no config")
+        mock_incluster.return_value = None
+        result = load_kubernetes_config()
+        assert isinstance(result, client.ApiClient)
+        mock_incluster.assert_called_once()
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_incluster_config")
+    def test_all_fallbacks_fail_raises_runtime_error(self, mock_incluster, mock_kube):
+        from kubernetes.config import ConfigException
+        mock_kube.side_effect = ConfigException("no config")
+        mock_incluster.side_effect = ConfigException("not in cluster")
+        with pytest.raises(RuntimeError, match="Could not configure"):
+            load_kubernetes_config()
 
 
-def test_incluster_auth_method_maps_common_fields(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(
-        auth_method="incluster",
-        use_keyring=True,
-        verify_ssl=False,
-        k8s_api_host="https://kubernetes.default",
-    )
+# ---------------------------------------------------------------------------
+# get_kubernetes_client
+# ---------------------------------------------------------------------------
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+class TestGetKubernetesClient:
+    def test_prebuilt_client_configuration(self):
+        cfg_obj = client.Configuration()
+        cfg_obj.host = "https://example:6443"
+        backend = KubernetesBackendConfig(client_configuration=cfg_obj)
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
 
-    mock_auth_config.assert_called_once_with(
-        verify_ssl=False,
-        k8s_api_host="https://kubernetes.default",
-        method="incluster",
-        use_keyring=True,
-    )
+    def test_token_and_server(self):
+        backend = KubernetesBackendConfig(
+            token="tok", server="https://api.test:6443"
+        )
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
+
+    def test_credentials_field(self):
+        creds = _StaticTokenCredentials("creds-tok")
+        backend = KubernetesBackendConfig(
+            credentials=creds, server="https://api.test:6443"
+        )
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
+        assert result.configuration.refresh_api_key_hook is not None
+        result.configuration.refresh_api_key_hook(result.configuration)
+        assert result.configuration.api_key["authorization"] == "creds-tok"
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    def test_legacy_config_file(self, mock_load):
+        mock_load.return_value = None
+        backend = KubernetesBackendConfig(config_file="/path/config")
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    def test_default_auto_detection(self, mock_load):
+        mock_load.return_value = None
+        backend = KubernetesBackendConfig()
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
 
 
-def test_openshift_without_token_omits_token_key(authkit_available, bridge_module):
-    cfg = KubernetesBackendConfig(auth_method="openshift", token=None)
+# ---------------------------------------------------------------------------
+# identity_annotations
+# ---------------------------------------------------------------------------
 
-    with patch.object(bridge_module, "kube_authkit_get_client", return_value=MagicMock()):
-        with patch.object(bridge_module, "AuthConfig") as mock_auth_config:
-            bridge_module.get_kubernetes_client(cfg)
+def _make_jwt(payload: dict) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).rstrip(b"=")
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=")
+    sig = base64.urlsafe_b64encode(b"fake-signature").rstrip(b"=")
+    return f"{header.decode()}.{body.decode()}.{sig.decode()}"
 
-    _, kwargs = mock_auth_config.call_args
-    assert "token" not in kwargs
+
+class TestIdentityAnnotations:
+    def test_full_claims(self):
+        token = _make_jwt({
+            "sub": "user-123",
+            "email": "user@example.com",
+            "preferred_username": "jdoe",
+            "groups": ["team-a", "team-b"],
+        })
+        result = identity_annotations(token)
+        assert result["kubeflow.org/user-id"] == "user-123"
+        assert result["kubeflow.org/user-email"] == "user@example.com"
+        assert result["kubeflow.org/user-name"] == "jdoe"
+        assert result["kubeflow.org/user-groups"] == "team-a,team-b"
+
+    def test_partial_claims(self):
+        token = _make_jwt({"sub": "user-456"})
+        result = identity_annotations(token)
+        assert result == {"kubeflow.org/user-id": "user-456"}
+
+    def test_empty_payload(self):
+        token = _make_jwt({})
+        result = identity_annotations(token)
+        assert result == {}
+
+    def test_invalid_token_returns_empty(self):
+        result = identity_annotations("not-a-jwt")
+        assert result == {}
+
+    def test_groups_as_single_string(self):
+        token = _make_jwt({"groups": ["admins"]})
+        result = identity_annotations(token)
+        assert result["kubeflow.org/user-groups"] == "admins"
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility
+# ---------------------------------------------------------------------------
+
+class TestBackwardCompatibility:
+    """Ensure old config_file / context patterns still work."""
+
+    @patch("kubeflow.common.auth.kube_authkit_bridge.config.load_kube_config")
+    def test_config_file_and_context(self, mock_load):
+        mock_load.return_value = None
+        backend = KubernetesBackendConfig(
+            config_file="/legacy/config", context="my-ctx"
+        )
+        result = get_kubernetes_client(backend)
+        assert isinstance(result, client.ApiClient)
+        mock_load.assert_called_once_with(
+            config_file="/legacy/config", context="my-ctx"
+        )
+
+    def test_verify_ssl_default_true(self):
+        backend = KubernetesBackendConfig()
+        assert backend.verify_ssl is True
+
+    def test_new_fields_default_none(self):
+        backend = KubernetesBackendConfig()
+        assert backend.credentials is None
+        assert backend.server is None
+        assert backend.use_client_credentials is False

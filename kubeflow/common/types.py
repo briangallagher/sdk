@@ -13,8 +13,15 @@
 # limitations under the License.
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from kubernetes import client
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from kubeflow.common.auth.types import TokenCredentialsBase
 
 
 class KubernetesBackendConfig(BaseModel):
@@ -22,6 +29,10 @@ class KubernetesBackendConfig(BaseModel):
     config_file: str | None = None
     context: str | None = None
     client_configuration: client.Configuration | None = None
+
+    # Pluggable credentials (satisfies TokenCredentialsBase protocol)
+    credentials: Any | None = None
+    server: str | None = None
 
     # kube-authkit authentication fields
     auth_method: str | None = None  # "auto", "kubeconfig", "incluster", "oidc", "openshift"
@@ -34,6 +45,7 @@ class KubernetesBackendConfig(BaseModel):
     client_secret: str | None = None
     scopes: list[str] | None = None
     use_device_flow: bool = False
+    use_client_credentials: bool = False
     oidc_callback_port: int = 8080
 
     # Token-based authentication
